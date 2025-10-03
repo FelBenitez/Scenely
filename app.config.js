@@ -12,15 +12,17 @@ export default () => ({
 
     ios: {
       supportsTablet: true,
-      bundleIdentifier: "com.scenely.app",     // <-- add this
+      bundleIdentifier: "com.scenely.app",
       infoPlist: {
         NSLocationWhenInUseUsageDescription:
           "Scenely uses your location to show nearby events and activity on the map.",
+          NSCameraUsageDescription: "Allow camera access to attach a photo to your post.",
+          NSPhotoLibraryUsageDescription: "Allow photo library access to attach a photo to your post.",
       },
     },
 
     android: {
-      package: "com.scenely.app",               // <-- add this (Android id)
+      package: "com.scenely.app",
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       adaptiveIcon: {
@@ -29,7 +31,7 @@ export default () => ({
         backgroundImage: "./assets/images/android-icon-background.png",
         monochromeImage: "./assets/images/android-icon-monochrome.png",
       },
-      permissions: ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
+      permissions: ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "CAMERA"],
     },
 
     web: { output: "static", favicon: "./assets/images/favicon.png" },
@@ -42,6 +44,12 @@ export default () => ({
           RNMapboxMapsDownloadToken: process.env.MAPBOX_DOWNLOADS_TOKEN,
         },
       ],
+      // Native config-needed modules:
+      "expo-secure-store",
+      ["expo-location", { isIosBackgroundLocationEnabled: false }], // flip to true only if i implement it
+      "expo-notifications",
+      "expo-image-picker",
+
       "expo-router",
       [
         "expo-splash-screen",
