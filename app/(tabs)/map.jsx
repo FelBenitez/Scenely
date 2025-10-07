@@ -13,133 +13,188 @@ const token =
 console.log('Mapbox token prefix:', token?.slice(0, 3));
 MapboxGL.setAccessToken(token || '');
 
-//simple clustering by distance (≈10m)
-const clusterPosts = (posts) => {
-  const clusters = [];
-  const clustered = new Set();
-  const CLUSTER_DISTANCE = 0.0001; // ~10 meters in lat/lng degrees (rough)
+// O(n) grid-hash clustering with latitude correction (~10m buckets)
+  const clusterPosts = (posts, refLat = 30.28) => {
+  const METERS_TO_LAT = 10 / 111000;
+  const METERS_TO_LNG = 10 / (111000 * Math.cos((refLat * Math.PI) / 180));
+  const GRID_SIZE_LAT = METERS_TO_LAT;
+  const GRID_SIZE_LNG = METERS_TO_LNG;
 
-  posts.forEach((post, i) => {
-    if (clustered.has(i)) return;
+  const grid = new Map();
 
-    const cluster = [post];
-    clustered.add(i);
+  posts.forEach(post => {
+    if (!Number.isFinite(post?.lat) || !Number.isFinite(post?.lng)) return;
 
-    posts.forEach((otherPost, j) => {
-      if (i === j || clustered.has(j)) return;
+    const cellX = Math.floor(post.lng / GRID_SIZE_LNG);
+    const cellY = Math.floor(post.lat / GRID_SIZE_LAT);
+    const key = `${cellX},${cellY}`;
 
-      const distance = Math.hypot(
-        post.lat - otherPost.lat,
-        post.lng - otherPost.lng
-      );
-
-      if (distance < CLUSTER_DISTANCE) {
-        cluster.push(otherPost);
-        clustered.add(j);
-      }
-    });
-
-    clusters.push(cluster);
+    if (!grid.has(key)) grid.set(key, []);
+    grid.get(key).push(post);
   });
 
-  return clusters;
+  return Array.from(grid.values()).filter(cluster => cluster.length > 0);
 };
 
-export default function MapTab() {
+  export default function MapTab() {
   const cameraRef = useRef(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [draftText, setDraftText] = useState('');
   const [userLoc, setUserLoc] = useState(null);
   const [posts, setPosts] = useState([]);
-  const [selectedCluster, setSelectedCluster] = useState(null); // array of posts in a cluster
-  // recompute clusters only when posts change
-  const clusters = useMemo(() => clusterPosts(posts), [posts]);
+  const [selectedCluster, setSelectedCluster] = useState(null);
+  const lastPostTime = useRef(0);
+
+  // Memoize clusters (use current latitude for accurate lng meters)
+  const clusters = useMemo(
+    () => clusterPosts(posts, userLoc?.latitude ?? 30.28),
+    [posts, userLoc?.latitude]
+  );
 
   // Get user location
   useEffect(() => {
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const { coords } = await Location.getCurrentPositionAsync({});
-        setUserLoc({ latitude: coords.latitude, longitude: coords.longitude });
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const { coords } = await Location.getCurrentPositionAsync({});
+          setUserLoc({ latitude: coords.latitude, longitude: coords.longitude });
+        }
+      } catch (error) {
+        console.error('Error getting location:', error);
       }
     })();
   }, []);
 
-  // Fetch existing posts on load (last 4 hours only)
+  // Fetch existing posts on load (last 4 hours, limit 400)
   useEffect(() => {
     const fetchPosts = async () => {
-      const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
-      
-      const { data, error } = await supabase
-        .from('posts')
-        .select('*')
-        .gt('created_at', fourHoursAgo)
-        .order('created_at', { ascending: false });
+      try {
+        const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
 
-      if (error) console.error('Error fetching posts:', error);
-      else setPosts(data || []);
+        const { data, error } = await supabase
+          .from('posts')
+          .select('*')
+          .gt('created_at', fourHoursAgo)
+          .order('created_at', { ascending: false })
+          .limit(400);
+
+        if (error) {
+          console.error('Error fetching posts:', error);
+        } else {
+          setPosts(data || []);
+        }
+      } catch (error) {
+        console.error('Unexpected error fetching posts:', error);
+      }
     };
 
     fetchPosts();
   }, []);
 
-  // Listen for realtime inserts
+  // Realtime inserts with cleanup + 4h window + 400 cap
   useEffect(() => {
-    const channel = supabase
-      .channel('public:posts')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'posts' },
-        payload => {
-          const post = payload.new;
-          setPosts(prev => (prev.some(p => p.id === post.id) ? prev : [post, ...prev]));
-        }
-      )
-      .subscribe();
+    let channel = null;
 
-    return () => { supabase.removeChannel(channel); };
+    const setupRealtime = async () => {
+      try {
+        channel = supabase
+          .channel('public:posts')
+          .on(
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'posts' },
+            payload => {
+              try {
+                const post = payload.new;
+                if (!post?.id || !Number.isFinite(post?.lat) || !Number.isFinite(post?.lng)) return;
+
+                setPosts(prev => {
+                  if (prev.some(p => p.id === post.id)) return prev;
+                  const updated = [post, ...prev];
+
+                  const fourHoursAgoMs = Date.now() - 4 * 60 * 60 * 1000;
+                  return updated
+                    .filter(p => p?.created_at && new Date(p.created_at).getTime() > fourHoursAgoMs)
+                    .slice(0, 400);
+                });
+              } catch (err) {
+                console.error('Error handling realtime insert:', err);
+              }
+            }
+          )
+          .subscribe();
+      } catch (err) {
+        console.error('Error setting up realtime:', err);
+      }
+    };
+
+    setupRealtime();
+
+    return () => {
+      if (channel) {
+        supabase.removeChannel(channel).catch(err => {
+          console.error('Error removing channel:', err);
+        });
+      }
+    };
   }, []);
 
   const submitPost = async () => {
-    let lat = userLoc?.latitude;
-    let lng = userLoc?.longitude;
-
-    if (lat == null || lng == null) {
-      try {
-        const { coords } = await Location.getCurrentPositionAsync({});
-        lat = coords.latitude;
-        lng = coords.longitude;
-      } catch {
-        lat = 30.2849;
-        lng = -97.7341;
+    try {
+      // Rate limiting: 10 seconds between posts
+      const now = Date.now();
+      if (now - lastPostTime.current < 10000) {
+        const secondsLeft = Math.ceil((10000 - (now - lastPostTime.current)) / 1000);
+        alert(`Please wait ${secondsLeft} more seconds before posting again`);
+        return;
       }
+
+      let lat = userLoc?.latitude;
+      let lng = userLoc?.longitude;
+
+      if (lat == null || lng == null) {
+        try {
+          const { coords } = await Location.getCurrentPositionAsync({});
+          lat = coords.latitude;
+          lng = coords.longitude;
+        } catch {
+          lat = 30.2849;
+          lng = -97.7341;
+        }
+      }
+
+      const text = draftText.trim();
+      if (!text) return;
+
+      const { data, error } = await supabase
+        .from('posts')
+        .insert([{ text, lat, lng }])
+        .select();
+
+      if (error) {
+        console.error('Error posting:', error);
+        alert('Failed to post. Please try again.');
+        return;
+      }
+
+      if (data && data[0]) {
+        lastPostTime.current = now;
+        setPosts(prev => [data[0], ...prev]);
+        setDraftText('');
+        setComposerOpen(false);
+
+        cameraRef.current?.setCamera({
+          centerCoordinate: [lng, lat],
+          zoomLevel: 16,
+          animationDuration: 500,
+        });
+
+        console.log('Posted to Supabase:', data[0]);
+      }
+    } catch (error) {
+      console.error('Unexpected error submitting post:', error);
+      alert('Something went wrong. Please try again.');
     }
-
-    const text = draftText.trim();
-    if (!text) return;
-
-    const { data, error } = await supabase
-      .from('posts')
-      .insert([{ text, lat, lng }])
-      .select();
-
-    if (error) {
-      console.error('Error posting:', error);
-      return;
-    }
-
-    setPosts((prev) => [data[0], ...prev]);
-    setDraftText('');
-    setComposerOpen(false);
-
-    cameraRef.current?.setCamera({
-      centerCoordinate: [lng, lat],
-      zoomLevel: 16,
-      animationDuration: 500,
-    });
-
-    console.log('Posted to Supabase!!!', data[0]);
   };
 
   return (
@@ -169,38 +224,42 @@ export default function MapTab() {
         />
 
         {clusters.map((cluster, idx) => {
-        const post = cluster[0];           // use first post for the marker position
-        const isMultiple = cluster.length > 1;
+          if (!cluster || cluster.length === 0) return null;
 
-        return (
-          <MapboxGL.MarkerView
-            key={`cluster-${idx}`}
-            id={`cluster-${idx}`}
-            coordinate={[post.lng, post.lat]}
-            anchor={{ x: 0.5, y: 1 }}
-          >
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => {
-                if (isMultiple) setSelectedCluster(cluster);
-              }}
+          const post = cluster[0];
+          if (!post?.lng || !post?.lat || !post?.text) return null;
+
+          const isMultiple = cluster.length > 1;
+
+          return (
+            <MapboxGL.MarkerView
+              key={`cluster-${idx}-${post.id}`}
+              id={`cluster-${idx}-${post.id}`}
+              coordinate={[post.lng, post.lat]}
+              anchor={{ x: 0.5, y: 1 }}
             >
-              <View style={styles.markerContainer}>
-                <View style={styles.bubble}>
-                  {isMultiple ? (
-                    <Text style={styles.bubbleText}>
-                      {cluster.length} posts • tap to view
-                    </Text>
-                  ) : (
-                    <Text style={styles.bubbleText}>{post.text}</Text>
-                  )}
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => {
+                  if (isMultiple) setSelectedCluster(cluster);
+                }}
+              >
+                <View style={styles.markerContainer}>
+                  <View style={styles.bubble}>
+                    {isMultiple ? (
+                      <Text style={styles.bubbleText}>
+                        {cluster.length} posts • tap to view
+                      </Text>
+                    ) : (
+                      <Text style={styles.bubbleText}>{post.text}</Text>
+                    )}
+                  </View>
+                  <View style={styles.bubbleArrow} />
                 </View>
-                <View style={styles.bubbleArrow} />
-              </View>
-            </TouchableOpacity>
-          </MapboxGL.MarkerView>
-        );
-      })}
+              </TouchableOpacity>
+            </MapboxGL.MarkerView>
+          );
+        })}
       </MapboxGL.MapView>
 
       <Modal
@@ -252,21 +311,24 @@ export default function MapTab() {
             </Text>
 
             <View style={{ maxHeight: 320 }}>
-              {selectedCluster?.map(p => (
-                <View
-                  key={p.id}
-                  style={{
-                    paddingVertical: 10,
-                    borderBottomWidth: StyleSheet.hairlineWidth,
-                    borderBottomColor: '#e5e5e5'
-                  }}
-                >
-                  <Text style={{ fontSize: 15, color: '#111' }}>{p.text}</Text>
-                  <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>
-                    {new Date(p.created_at).toLocaleTimeString()}
-                  </Text>
-                </View>
-              ))}
+              {selectedCluster?.map(p => {
+                if (!p?.id || !p?.text) return null;
+                return (
+                  <View
+                    key={p.id}
+                    style={{
+                      paddingVertical: 10,
+                      borderBottomWidth: StyleSheet.hairlineWidth,
+                      borderBottomColor: '#e5e5e5'
+                    }}
+                  >
+                    <Text style={{ fontSize: 15, color: '#111' }}>{p.text}</Text>
+                    <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>
+                      {p.created_at ? new Date(p.created_at).toLocaleTimeString() : ''}
+                    </Text>
+                  </View>
+                );
+              })}
             </View>
 
             <View style={styles.row}>
