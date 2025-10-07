@@ -2,7 +2,7 @@
 import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 
@@ -13,12 +13,47 @@ const token =
 console.log('Mapbox token prefix:', token?.slice(0, 3));
 MapboxGL.setAccessToken(token || '');
 
+//simple clustering by distance (≈10m)
+const clusterPosts = (posts) => {
+  const clusters = [];
+  const clustered = new Set();
+  const CLUSTER_DISTANCE = 0.0001; // ~10 meters in lat/lng degrees (rough)
+
+  posts.forEach((post, i) => {
+    if (clustered.has(i)) return;
+
+    const cluster = [post];
+    clustered.add(i);
+
+    posts.forEach((otherPost, j) => {
+      if (i === j || clustered.has(j)) return;
+
+      const distance = Math.hypot(
+        post.lat - otherPost.lat,
+        post.lng - otherPost.lng
+      );
+
+      if (distance < CLUSTER_DISTANCE) {
+        cluster.push(otherPost);
+        clustered.add(j);
+      }
+    });
+
+    clusters.push(cluster);
+  });
+
+  return clusters;
+};
+
 export default function MapTab() {
   const cameraRef = useRef(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [draftText, setDraftText] = useState('');
   const [userLoc, setUserLoc] = useState(null);
   const [posts, setPosts] = useState([]);
+  const [selectedCluster, setSelectedCluster] = useState(null); // array of posts in a cluster
+  // recompute clusters only when posts change
+  const clusters = useMemo(() => clusterPosts(posts), [posts]);
 
   // Get user location
   useEffect(() => {
@@ -133,21 +168,39 @@ export default function MapTab() {
           }}
         />
 
-        {posts.map((p) => (
+        {clusters.map((cluster, idx) => {
+        const post = cluster[0];           // use first post for the marker position
+        const isMultiple = cluster.length > 1;
+
+        return (
           <MapboxGL.MarkerView
-            key={p.id}
-            id={p.id}
-            coordinate={[p.lng, p.lat]}
+            key={`cluster-${idx}`}
+            id={`cluster-${idx}`}
+            coordinate={[post.lng, post.lat]}
             anchor={{ x: 0.5, y: 1 }}
           >
-            <View style={styles.markerContainer}>
-              <View style={styles.bubble}>
-                <Text style={styles.bubbleText}>{p.text}</Text>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => {
+                if (isMultiple) setSelectedCluster(cluster);
+              }}
+            >
+              <View style={styles.markerContainer}>
+                <View style={styles.bubble}>
+                  {isMultiple ? (
+                    <Text style={styles.bubbleText}>
+                      {cluster.length} posts • tap to view
+                    </Text>
+                  ) : (
+                    <Text style={styles.bubbleText}>{post.text}</Text>
+                  )}
+                </View>
+                <View style={styles.bubbleArrow} />
               </View>
-              <View style={styles.bubbleArrow} />
-            </View>
+            </TouchableOpacity>
           </MapboxGL.MarkerView>
-        ))}
+        );
+      })}
       </MapboxGL.MapView>
 
       <Modal
@@ -179,6 +232,49 @@ export default function MapTab() {
               </TouchableOpacity>
               <TouchableOpacity style={styles.primaryBtn} onPress={submitPost}>
                 <Text style={{ color: 'white', fontWeight: '600' }}>Post</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Cluster details modal */}
+      <Modal
+        transparent
+        visible={!!selectedCluster}
+        animationType="slide"
+        onRequestClose={() => setSelectedCluster(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle}>
+              {selectedCluster?.length || 0} posts in this spot
+            </Text>
+
+            <View style={{ maxHeight: 320 }}>
+              {selectedCluster?.map(p => (
+                <View
+                  key={p.id}
+                  style={{
+                    paddingVertical: 10,
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                    borderBottomColor: '#e5e5e5'
+                  }}
+                >
+                  <Text style={{ fontSize: 15, color: '#111' }}>{p.text}</Text>
+                  <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>
+                    {new Date(p.created_at).toLocaleTimeString()}
+                  </Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.row}>
+              <TouchableOpacity
+                style={styles.primaryBtn}
+                onPress={() => setSelectedCluster(null)}
+              >
+                <Text style={{ color: 'white', fontWeight: '600' }}>Close</Text>
               </TouchableOpacity>
             </View>
           </View>
