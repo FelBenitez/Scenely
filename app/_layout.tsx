@@ -33,7 +33,7 @@ export default function RootLayout() {
   if (!session && !inAuth) {
     router.replace({ pathname: '/(auth)/sign-in' });   
   } else if (session && inAuth) {
-    router.replace({ pathname: '/(tabs)' });          
+    router.replace('/(tabs)/feed');          
   }
 }, [session, segments, router]);
 
