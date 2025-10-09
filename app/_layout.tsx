@@ -10,6 +10,13 @@ export default function RootLayout() {
   const segments = useSegments();
   const router = useRouter();
 
+  // loads true if saves state and skips sign-in screen
+  useEffect(() => {
+  supabase.auth.getSession().then(({ data }) =>
+    console.log('session at boot?', !!data.session)
+    );
+  }, []);
+
   // Load session once, then subscribe
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
