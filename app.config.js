@@ -49,6 +49,7 @@ export default () => ({
       ["expo-location", { isIosBackgroundLocationEnabled: false }], // flip to true only if i implement it
       "expo-notifications",
       "expo-image-picker",
+      "expo-localization",
 
       "expo-router",
       [
