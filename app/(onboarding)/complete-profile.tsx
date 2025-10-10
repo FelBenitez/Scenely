@@ -39,44 +39,46 @@ export default function CompleteProfile() {
   }, [normalized, validFormat]);
 
   const pickImage = async () => {
-    const res = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+  const res = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
     allowsEditing: true,
     quality: 0.8,
+  });
+  if (!res.canceled) {
+    setAvatarUri(res.assets[0].uri);
+  }
+};
+
+// Use arrayBuffer for React Native
+const uploadAvatarIfAny = async (userId: string): Promise<string | null> => {
+  if (!avatarUri) return null;
+  
+  // Try to preserve extension; default to jpg
+  const ext = (avatarUri.split('.').pop() || 'jpg').toLowerCase();
+  const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+  const path = `${userId}/avatar.${ext}`;
+  
+  // Read the file as arrayBuffer
+  const response = await fetch(avatarUri);
+  const arrayBuffer = await response.arrayBuffer();
+  const uint8Array = new Uint8Array(arrayBuffer);
+  
+  const { error } = await supabase
+    .storage
+    .from('avatars')
+    .upload(path, uint8Array, { 
+      upsert: true,
+      contentType: mime 
     });
-    if (!res.canceled) {
-      setAvatarUri(res.assets[0].uri);
-    }
-  };
-
-  // Use a RN file object
-  const uploadAvatarIfAny = async (userId: string): Promise<string | null> => {
-    if (!avatarUri) return null;
-
-    // Try to preserve extension; default to jpg
-    const ext = (avatarUri.split('.').pop() || 'jpg').toLowerCase();
-    const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-    const path = `${userId}/avatar.${ext}`;
-
-    const file = {
-      uri: avatarUri,
-      name: `avatar.${ext}`,
-      type: mime,
-    } as any;
-
-    const { error } = await supabase
-      .storage
-      .from('avatars') // make sure this bucket exists (public for MVP)
-      .upload(path, file, { upsert: true });
-
-    if (error) {
-      console.warn('avatar upload error', error.message);
-      return null;
-    }
-
-    const { data } = supabase.storage.from('avatars').getPublicUrl(path);
-    return data.publicUrl ?? null;
-  };
+    
+  if (error) {
+    console.warn('avatar upload error', error.message);
+    return null;
+  }
+  
+  const { data } = supabase.storage.from('avatars').getPublicUrl(path);
+  return data.publicUrl ?? null;
+};
 
   const submit = async () => {
     if (!validFormat) return Alert.alert('Username', 'Use 3–20 chars: a–z, 0–9, _, .');
