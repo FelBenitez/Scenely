@@ -14,14 +14,40 @@ export default function RootLayout() {
   const segments = useSegments();
   const router = useRouter();
 
-  // 1) load session + subscribe
+useEffect(() => {
+  // don’t open a realtime socket if not signed in or already onboarded to not keep streaming the data
+  if (!session?.user?.id) return;
+  if (profile?.onboarded) return;
+
+  const ch = supabase
+    .channel('profiles-updates')
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'profiles',
+        filter: `id=eq.${session.user.id}`,
+      },
+      (payload) => {
+        setProfile((prev) => ({ ...(prev ?? {} as any), ...(payload.new as any) }));
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(ch);
+  };
+}, [session?.user?.id, profile?.onboarded]);
+
+  // load session + subscribe
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  // 2) fetch my profile when we have a session
+  // fetch my profile when we have a session
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -36,7 +62,7 @@ export default function RootLayout() {
     return () => { cancelled = true; };
   }, [session]);
 
-  // 3) routing guard
+  // routing guard
   useEffect(() => {
     if (session === undefined || profile === undefined) return; // still loading
     const inAuth = segments[0] === '(auth)';
