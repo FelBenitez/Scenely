@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Alert, Image, StyleSheet } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../../lib/supabase';
+import { useRouter } from 'expo-router';
 
 const USERNAME_RE = /^[a-z0-9_.]{3,20}$/;
 
@@ -15,6 +16,7 @@ export default function CompleteProfile() {
 
   const normalized = useMemo(() => username.trim().toLowerCase(), [username]);
   const validFormat = USERNAME_RE.test(normalized);
+  const router = useRouter();
 
   // Debounced username availability check
   useEffect(() => {
@@ -102,7 +104,8 @@ const uploadAvatarIfAny = async (userId: string): Promise<string | null> => {
         .eq('id', user.id);
 
       if (error) throw error;
-      // success, your root layout will route to /(tabs)/feed
+      // immediately move to the app
+      router.replace('/(tabs)/feed')
     } catch (e: any) {
       Alert.alert('Couldn’t finish profile', e.message ?? 'Try again.');
     } finally {
