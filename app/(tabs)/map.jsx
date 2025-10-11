@@ -3,7 +3,7 @@ import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 
@@ -15,7 +15,7 @@ console.log('Mapbox token prefix:', token?.slice(0, 3));
 MapboxGL.setAccessToken(token || '');
 
 // O(n) grid-hash clustering with latitude correction (~10m buckets)
-  const clusterPosts = (posts, refLat = 30.28) => {
+const clusterPosts = (posts, refLat = 30.28) => {
   const METERS_TO_LAT = 10 / 111000;
   const METERS_TO_LNG = 10 / (111000 * Math.cos((refLat * Math.PI) / 180));
   const GRID_SIZE_LAT = METERS_TO_LAT;
@@ -37,7 +37,25 @@ MapboxGL.setAccessToken(token || '');
   return Array.from(grid.values()).filter(cluster => cluster.length > 0);
 };
 
-  export default function MapTab() {
+// Track previous positions for animation (outside component)
+const prevPositionsMap = new Map();
+
+// Helper: calculate distance in meters
+function distanceInMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000; // Earth radius in meters
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+export default function MapTab() {
   const cameraRef = useRef(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [draftText, setDraftText] = useState('');
@@ -55,14 +73,36 @@ MapboxGL.setAccessToken(token || '');
   const pollRef = useRef(null);                     // read loop interval
   const appState = useRef(AppState.currentState);   // pause in background
 
+  // Animation state
+  const [animatedPositions, setAnimatedPositions] = useState(new Map());
+  const animationFrames = useRef(new Map());
+
   // config knobs
   const HEARTBEAT_MS = 20_000; // send position every 20s
   const POLL_MS = 20_000;      // refresh others every 20s
   const MAX_LIVE_MIN = 45;     // hide after 45 minutes
   // Buckets: live<=2, warm<=10, cooling<=30, else stale<=45(hidden)
 
-  // snap to ~25m grid + small jitter for privacy
-  function coarseAndJitter(lat, lng) {
+  // Stable jitter based on user_id hash (FIXED: handles negative hashes)
+  function stableJitter(userId, meters = 8) {
+    let hash = 0;
+    for (let i = 0; i < userId.length; i++) {
+      hash = ((hash << 5) - hash) + userId.charCodeAt(i);
+      hash = hash & hash;
+    }
+    
+    // Normalize to [0, 1] range (handles negative hashes)
+    const normalized = ((hash % 10000) + 10000) % 10000 / 10000;
+    const angle = normalized * Math.PI * 2;
+    
+    return {
+      latOffset: Math.cos(angle) * (meters / 111000),
+      lngOffset: Math.sin(angle) * (meters / 111000),
+    };
+  }
+
+  // snap to ~25m grid + stable jitter for privacy
+  function coarseAndJitter(lat, lng, userId) {
     const meters = 25;
     const latStep = meters / 111000; // deg lat per 25m
     const lngStep = meters / (111000 * Math.cos((lat * Math.PI) / 180));
@@ -70,13 +110,12 @@ MapboxGL.setAccessToken(token || '');
     const latCoarse = Math.round(lat / latStep) * latStep;
     const lngCoarse = Math.round(lng / lngStep) * lngStep;
 
-    // jitter ±(meters/3)
-    const jMeters = meters / 3; // ~8m
-    const jLat = (Math.random() * 2 - 1) * (jMeters / 111000);
-    const jLng = (Math.random() * 2 - 1) * (jMeters / (111000 * Math.cos((lat * Math.PI) / 180)));
+    // Stable jitter - same user always gets same offset
+    const { latOffset, lngOffset } = stableJitter(userId, 8);
+    const lngOffsetCorrected = lngOffset / Math.cos((lat * Math.PI) / 180);
 
-    const latJ = latCoarse + jLat;
-    const lngJ = lngCoarse + jLng;
+    const latJ = latCoarse + latOffset;
+    const lngJ = lngCoarse + lngOffsetCorrected;
     const gridId = `${Math.round(latCoarse/latStep)}:${Math.round(lngCoarse/lngStep)}`;
     return { lat: latJ, lng: lngJ, gridId };
   }
@@ -90,18 +129,17 @@ MapboxGL.setAccessToken(token || '');
     return { bucket: 'hide', opacity: 0, label: '' };
   }
 
-
   // Memoize clusters (use current latitude for accurate lng meters)
   const clusters = useMemo(
     () => clusterPosts(posts, userLoc?.latitude ?? 30.28),
     [posts, userLoc?.latitude]
   );
 
-    useEffect(() => {
-  console.log(
-    `📍 Location sharing: ${shareLive ? 'ON' : 'OFF'} | 🔁 Polling: ${pollingActive ? 'ON' : 'OFF, NOT SENDING OR RECEIVING!!!!'}`
-  );
-}, [pollingActive, shareLive]);
+  useEffect(() => {
+    console.log(
+      `📍 Location sharing: ${shareLive ? 'ON' : 'OFF'} | 🔁 Polling: ${pollingActive ? 'ON' : 'OFF, NOT SENDING OR RECEIVING!!!!'}`
+    );
+  }, [pollingActive, shareLive]);
 
   // Get user location
   useEffect(() => {
@@ -111,9 +149,17 @@ MapboxGL.setAccessToken(token || '');
         if (status === 'granted') {
           const { coords } = await Location.getCurrentPositionAsync({});
           setUserLoc({ latitude: coords.latitude, longitude: coords.longitude });
+        } else {
+          Alert.alert(
+            'Location Required',
+            'Please enable location to share your position and see others nearby.',
+            [{ text: 'OK' }]
+          );
+          setShareLive(false); // Disable sharing if no permission
         }
       } catch (error) {
         console.error('Error getting location:', error);
+        Alert.alert('Location Error', 'Could not get your location. Please try again.');
       }
     })();
   }, []);
@@ -191,7 +237,6 @@ MapboxGL.setAccessToken(token || '');
     };
   }, []);
 
-
   // [LIVELOC] WRITE: heartbeat your coarse+jittered location every 20s
   async function sendHeartbeat() {
     try {
@@ -200,22 +245,17 @@ MapboxGL.setAccessToken(token || '');
       let lng = userLoc?.longitude;
       if (lat == null || lng == null) {
         const { coords } = await Location.getCurrentPositionAsync({});
-        lat = coords.latitude; lng = coords.longitude;
+        lat = coords.latitude;
+        lng = coords.longitude;
       }
       if (lat == null || lng == null) return;
 
-      const coarse = coarseAndJitter(lat, lng);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // pull username/avatar once (cheap select)
-      const { data: prof } = await supabase
-        .from('profiles')
-        .select('username, avatar_url')
-        .eq('id', user.id)
-        .maybeSingle();
+      const coarse = coarseAndJitter(lat, lng, user.id); // Pass user.id for stable jitter
 
-      await supabase
+      const { error } = await supabase
         .from('live_locations')
         .upsert({
           user_id: user.id,
@@ -223,11 +263,13 @@ MapboxGL.setAccessToken(token || '');
           lng: coarse.lng,
           grid_id: coarse.gridId,
           last_seen: new Date().toISOString(),
-          username: prof?.username ?? null,
-          avatar_url: prof?.avatar_url ?? null,
         });
+
+      if (error) {
+        console.error('[LiveLoc] Heartbeat failed:', error.message);
+      }
     } catch (e) {
-      // silent fail; we’ll try again next tick
+      console.error('[LiveLoc] Heartbeat error:', e);
     }
   }
 
@@ -251,11 +293,16 @@ MapboxGL.setAccessToken(token || '');
         .lte('lng', center.longitude + lngPad)
         .limit(2000);
 
-      if (!error && Array.isArray(data)) {
+      if (error) {
+        console.error('[LiveLoc] Poll failed:', error.message);
+        return;
+      }
+
+      if (Array.isArray(data)) {
         setLiveUsers(data);
       }
     } catch (e) {
-      // ignore
+      console.error('[LiveLoc] Poll error:', e);
     }
   }
 
@@ -268,7 +315,7 @@ MapboxGL.setAccessToken(token || '');
         // pause loops
         if (heartbeatRef.current) clearInterval(heartbeatRef.current);
         if (pollRef.current) clearInterval(pollRef.current);
-      } else if (state === 'active' && shareLive) {
+      } else if (state === 'active' && shareLive && pollingActive) {
         // resume
         sendHeartbeat();
         pollNearby();
@@ -278,7 +325,7 @@ MapboxGL.setAccessToken(token || '');
     };
     const sub = AppState.addEventListener('change', onAppStateChange);
     return () => sub.remove();
-  }, [shareLive, userLoc]); // restart if user toggles or center changes
+  }, [shareLive, pollingActive]);
 
   // [LIVELOC] boot loops when mounted (and sharing on)
   useEffect(() => {
@@ -295,8 +342,84 @@ MapboxGL.setAccessToken(token || '');
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [shareLive, pollingActive, userLoc]);
+  }, [shareLive, pollingActive]);
 
+  // Animate position changes only when users move
+  useEffect(() => {
+    liveUsers.forEach(u => {
+      if (!Number.isFinite(u?.lat) || !Number.isFinite(u?.lng)) return;
+      
+      const prev = prevPositionsMap.get(u.user_id);
+      
+      if (!prev) {
+        // First time seeing this user - no animation
+        prevPositionsMap.set(u.user_id, { lat: u.lat, lng: u.lng });
+        setAnimatedPositions(map => new Map(map).set(u.user_id, { lat: u.lat, lng: u.lng }));
+        return;
+      }
+      
+      // Check if they moved (threshold: 5 meters to avoid GPS noise)
+      const dist = distanceInMeters(prev.lat, prev.lng, u.lat, u.lng);
+      
+      if (dist < 5) {
+        // Didn't move - keep old position, no animation
+        return;
+      }
+      
+      // They moved - animate from prev to new
+      const startTime = Date.now();
+      const duration = 1500; // 1.5 seconds
+      
+      // Cancel any existing animation for this user
+      if (animationFrames.current.has(u.user_id)) {
+        cancelAnimationFrame(animationFrames.current.get(u.user_id));
+      }
+      
+      const animate = () => {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        
+        // Ease-out cubic
+        const eased = 1 - Math.pow(1 - progress, 3);
+        
+        const lat = prev.lat + (u.lat - prev.lat) * eased;
+        const lng = prev.lng + (u.lng - prev.lng) * eased;
+        
+        setAnimatedPositions(map => new Map(map).set(u.user_id, { lat, lng }));
+        
+        if (progress < 1) {
+          animationFrames.current.set(u.user_id, requestAnimationFrame(animate));
+        } else {
+          // Animation complete - update prev position
+          prevPositionsMap.set(u.user_id, { lat: u.lat, lng: u.lng });
+          animationFrames.current.delete(u.user_id);
+        }
+      };
+      
+      requestAnimationFrame(animate);
+    });
+    
+    // Cleanup users who left
+    const currentIds = new Set(liveUsers.map(u => u.user_id));
+    Array.from(prevPositionsMap.keys()).forEach(id => {
+      if (!currentIds.has(id)) {
+        prevPositionsMap.delete(id);
+        animationFrames.current.delete(id);
+        setAnimatedPositions(map => {
+          const newMap = new Map(map);
+          newMap.delete(id);
+          return newMap;
+        });
+      }
+    });
+  }, [liveUsers]);
+
+  // Cleanup animations on unmount
+  useEffect(() => {
+    return () => {
+      animationFrames.current.forEach(frame => cancelAnimationFrame(frame));
+    };
+  }, []);
 
   const submitPost = async () => {
     try {
@@ -382,19 +505,24 @@ MapboxGL.setAccessToken(token || '');
           }}
         />
 
-
         {/* [LIVELOC] render live users with age buckets */}
         {liveUsers.map((u) => {
           if (!Number.isFinite(u?.lat) || !Number.isFinite(u?.lng) || !u?.last_seen) return null;
+          
           const mins = (Date.now() - new Date(u.last_seen).getTime()) / 60000;
           const { bucket, opacity, label } = classifyAge(mins);
           if (bucket === 'hide') return null;
+          
+          // Use animated position if available, otherwise use raw position
+          const pos = animatedPositions.get(u.user_id) || { lat: u.lat, lng: u.lng };
+          
           const showAvatar = !!u.avatar_url;
+          
           return (
             <MapboxGL.MarkerView
               key={`live-${u.user_id}`}
               id={`live-${u.user_id}`}
-              coordinate={[u.lng, u.lat]}
+              coordinate={[pos.lng, pos.lat]}
               anchor={{ x: 0.5, y: 1 }}
             >
               <View style={{ alignItems: 'center', opacity }}>
@@ -424,14 +552,6 @@ MapboxGL.setAccessToken(token || '');
             </MapboxGL.MarkerView>
           );
         })}
-
-
-
-
-
-
-
-
 
         {clusters.map((cluster, idx) => {
           if (!cluster || cluster.length === 0) return null;
@@ -553,20 +673,18 @@ MapboxGL.setAccessToken(token || '');
         </View>
       </Modal>
 
-
-    {/* [DEV] Polling toggle */}
-    <TouchableOpacity
-      style={[
-        styles.fab,
-        { left: 16, bottom: 24, backgroundColor: pollingActive ? '#22c55e' : '#9CA3AF' },
-      ]}
-      onPress={() => setPollingActive((p) => !p)}
-    >
-      <Text style={styles.fabText}>
-        {pollingActive ? 'Polling' : 'Not polling'}
-      </Text>
-    </TouchableOpacity>
-
+      {/* [DEV] Polling toggle */}
+      <TouchableOpacity
+        style={[
+          styles.fab,
+          { left: 16, bottom: 24, backgroundColor: pollingActive ? '#22c55e' : '#9CA3AF' },
+        ]}
+        onPress={() => setPollingActive((p) => !p)}
+      >
+        <Text style={styles.fabText}>
+          {pollingActive ? 'Polling' : 'Not polling'}
+        </Text>
+      </TouchableOpacity>
 
       {/* [LIVELOC] quick toggle for share */}
       <TouchableOpacity
@@ -575,7 +693,6 @@ MapboxGL.setAccessToken(token || '');
       >
         <Text style={styles.fabText}>{shareLive ? 'On' : 'Off'}</Text>
       </TouchableOpacity>
-
 
       <TouchableOpacity
         style={styles.fab}
@@ -691,5 +808,4 @@ const styles = StyleSheet.create({
   avatarCircle: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden' },
   avatarWrap: { flex: 1 },
   avatarImgWrap: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#eee' },
-
 });
