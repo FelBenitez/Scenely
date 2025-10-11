@@ -326,6 +326,7 @@ export default function MapTab() {
     const sub = AppState.addEventListener('change', onAppStateChange);
     return () => sub.remove();
   }, [shareLive, pollingActive]);
+  
 
   // [LIVELOC] boot loops when mounted (and sharing on)
   useEffect(() => {
