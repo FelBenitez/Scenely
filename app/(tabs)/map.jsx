@@ -3,6 +3,7 @@ import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 
@@ -45,11 +46,62 @@ MapboxGL.setAccessToken(token || '');
   const [selectedCluster, setSelectedCluster] = useState(null);
   const lastPostTime = useRef(0);
 
+  // Live location
+  const [shareLive, setShareLive] = useState(true); // toggle to share/halt heartbeat
+  const [liveUsers, setLiveUsers] = useState([]);   // array of {user_id,lat,lng,last_seen,username,avatar_url}
+  // [DEV] toggle for polling to save Supabase data during dev
+  const [pollingActive, setPollingActive] = useState(false);
+  const heartbeatRef = useRef(null);                // write loop interval
+  const pollRef = useRef(null);                     // read loop interval
+  const appState = useRef(AppState.currentState);   // pause in background
+
+  // config knobs
+  const HEARTBEAT_MS = 20_000; // send position every 20s
+  const POLL_MS = 20_000;      // refresh others every 20s
+  const MAX_LIVE_MIN = 45;     // hide after 45 minutes
+  // Buckets: live<=2, warm<=10, cooling<=30, else stale<=45(hidden)
+
+  // snap to ~25m grid + small jitter for privacy
+  function coarseAndJitter(lat, lng) {
+    const meters = 25;
+    const latStep = meters / 111000; // deg lat per 25m
+    const lngStep = meters / (111000 * Math.cos((lat * Math.PI) / 180));
+
+    const latCoarse = Math.round(lat / latStep) * latStep;
+    const lngCoarse = Math.round(lng / lngStep) * lngStep;
+
+    // jitter ±(meters/3)
+    const jMeters = meters / 3; // ~8m
+    const jLat = (Math.random() * 2 - 1) * (jMeters / 111000);
+    const jLng = (Math.random() * 2 - 1) * (jMeters / (111000 * Math.cos((lat * Math.PI) / 180)));
+
+    const latJ = latCoarse + jLat;
+    const lngJ = lngCoarse + jLng;
+    const gridId = `${Math.round(latCoarse/latStep)}:${Math.round(lngCoarse/lngStep)}`;
+    return { lat: latJ, lng: lngJ, gridId };
+  }
+
+  // helper: classify by age (minutes)
+  function classifyAge(mins) {
+    if (mins <= 2) return { bucket: 'live', opacity: 1, label: 'Live' };
+    if (mins <= 10) return { bucket: 'warm', opacity: 0.9, label: `${Math.round(mins)}m` };
+    if (mins <= 30) return { bucket: 'cooling', opacity: 0.7, label: `${Math.round(mins)}m` };
+    if (mins <= MAX_LIVE_MIN) return { bucket: 'stale', opacity: 0.5, label: `~${Math.round(mins)}m` };
+    return { bucket: 'hide', opacity: 0, label: '' };
+  }
+
+
   // Memoize clusters (use current latitude for accurate lng meters)
   const clusters = useMemo(
     () => clusterPosts(posts, userLoc?.latitude ?? 30.28),
     [posts, userLoc?.latitude]
   );
+
+    useEffect(() => {
+  console.log(
+    `📍 Location sharing: ${shareLive ? 'ON' : 'OFF'} | 🔁 Polling: ${pollingActive ? 'ON' : 'OFF, NOT SENDING OR RECEIVING!!!!'}`
+  );
+}, [pollingActive, shareLive]);
 
   // Get user location
   useEffect(() => {
@@ -139,6 +191,113 @@ MapboxGL.setAccessToken(token || '');
     };
   }, []);
 
+
+  // [LIVELOC] WRITE: heartbeat your coarse+jittered location every 20s
+  async function sendHeartbeat() {
+    try {
+      // if we don't have a cached location, try once (non-blocking)
+      let lat = userLoc?.latitude;
+      let lng = userLoc?.longitude;
+      if (lat == null || lng == null) {
+        const { coords } = await Location.getCurrentPositionAsync({});
+        lat = coords.latitude; lng = coords.longitude;
+      }
+      if (lat == null || lng == null) return;
+
+      const coarse = coarseAndJitter(lat, lng);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // pull username/avatar once (cheap select)
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('username, avatar_url')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      await supabase
+        .from('live_locations')
+        .upsert({
+          user_id: user.id,
+          lat: coarse.lat,
+          lng: coarse.lng,
+          grid_id: coarse.gridId,
+          last_seen: new Date().toISOString(),
+          username: prof?.username ?? null,
+          avatar_url: prof?.avatar_url ?? null,
+        });
+    } catch (e) {
+      // silent fail; we’ll try again next tick
+    }
+  }
+
+  // [LIVELOC] READ: poll nearby users every 20s (last <= 60min; hide > 45min in UI)
+  async function pollNearby() {
+    try {
+      // simple bounding box around current user to trim payload
+      const center = userLoc ?? { latitude: 30.2849, longitude: -97.7341 };
+      const latPad = 0.2; // ~22km; tune for campus size
+      const lngPad = 0.2;
+
+      const sinceIso = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // last 60 min
+
+      const { data, error } = await supabase
+        .from('live_locations')
+        .select('user_id, lat, lng, last_seen, username, avatar_url')
+        .gt('last_seen', sinceIso)
+        .gte('lat', center.latitude - latPad)
+        .lte('lat', center.latitude + latPad)
+        .gte('lng', center.longitude - lngPad)
+        .lte('lng', center.longitude + lngPad)
+        .limit(2000);
+
+      if (!error && Array.isArray(data)) {
+        setLiveUsers(data);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // [LIVELOC] start/stop loops depending on app state and toggle
+  useEffect(() => {
+    const onAppStateChange = (state) => {
+      const goingBg = appState.current.match(/active/) && state.match(/inactive|background/);
+      appState.current = state;
+      if (goingBg) {
+        // pause loops
+        if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+        if (pollRef.current) clearInterval(pollRef.current);
+      } else if (state === 'active' && shareLive) {
+        // resume
+        sendHeartbeat();
+        pollNearby();
+        heartbeatRef.current = setInterval(sendHeartbeat, HEARTBEAT_MS);
+        pollRef.current = setInterval(pollNearby, POLL_MS);
+      }
+    };
+    const sub = AppState.addEventListener('change', onAppStateChange);
+    return () => sub.remove();
+  }, [shareLive, userLoc]); // restart if user toggles or center changes
+
+  // [LIVELOC] boot loops when mounted (and sharing on)
+  useEffect(() => {
+    if (!shareLive || !pollingActive) {
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      if (pollRef.current) clearInterval(pollRef.current);
+      return;
+    }
+    sendHeartbeat();
+    pollNearby();
+    heartbeatRef.current = setInterval(sendHeartbeat, HEARTBEAT_MS);
+    pollRef.current = setInterval(pollNearby, POLL_MS);
+    return () => {
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [shareLive, pollingActive, userLoc]);
+
+
   const submitPost = async () => {
     try {
       // Rate limiting: 10 seconds between posts
@@ -222,6 +381,57 @@ MapboxGL.setAccessToken(token || '');
             }
           }}
         />
+
+
+        {/* [LIVELOC] render live users with age buckets */}
+        {liveUsers.map((u) => {
+          if (!Number.isFinite(u?.lat) || !Number.isFinite(u?.lng) || !u?.last_seen) return null;
+          const mins = (Date.now() - new Date(u.last_seen).getTime()) / 60000;
+          const { bucket, opacity, label } = classifyAge(mins);
+          if (bucket === 'hide') return null;
+          const showAvatar = !!u.avatar_url;
+          return (
+            <MapboxGL.MarkerView
+              key={`live-${u.user_id}`}
+              id={`live-${u.user_id}`}
+              coordinate={[u.lng, u.lat]}
+              anchor={{ x: 0.5, y: 1 }}
+            >
+              <View style={{ alignItems: 'center', opacity }}>
+                <View style={[
+                  styles.liveBadge,
+                  bucket === 'live' && styles.liveSolid,
+                  bucket === 'warm' && styles.liveWarm,
+                  bucket === 'cooling' && styles.liveCooling,
+                  bucket === 'stale' && styles.liveStale,
+                ]}>
+                  {showAvatar ? (
+                    <View style={styles.avatarCircle}>
+                      <MapboxGL.Images images={{}} />{/* placeholder to avoid warnings */}
+                      <View style={styles.avatarWrap}>
+                        {/* RN <Image> inside marker */}
+                        <View style={styles.avatarImgWrap}>
+                          <Text style={{display:'none'}}>{u.username ?? ''}</Text>
+                        </View>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.dot}/>
+                  )}
+                </View>
+                <Text style={styles.liveLabel}>{label}</Text>
+              </View>
+            </MapboxGL.MarkerView>
+          );
+        })}
+
+
+
+
+
+
+
+
 
         {clusters.map((cluster, idx) => {
           if (!cluster || cluster.length === 0) return null;
@@ -343,6 +553,30 @@ MapboxGL.setAccessToken(token || '');
         </View>
       </Modal>
 
+
+    {/* [DEV] Polling toggle */}
+    <TouchableOpacity
+      style={[
+        styles.fab,
+        { left: 16, bottom: 24, backgroundColor: pollingActive ? '#22c55e' : '#9CA3AF' },
+      ]}
+      onPress={() => setPollingActive((p) => !p)}
+    >
+      <Text style={styles.fabText}>
+        {pollingActive ? 'Polling' : 'Not polling'}
+      </Text>
+    </TouchableOpacity>
+
+
+      {/* [LIVELOC] quick toggle for share */}
+      <TouchableOpacity
+        style={[styles.fab, { right: 96, backgroundColor: shareLive ? '#1976D2' : '#9CA3AF' }]}
+        onPress={() => setShareLive(s => !s)}
+      >
+        <Text style={styles.fabText}>{shareLive ? 'On' : 'Off'}</Text>
+      </TouchableOpacity>
+
+
       <TouchableOpacity
         style={styles.fab}
         onPress={() => setComposerOpen(true)}
@@ -440,4 +674,22 @@ const styles = StyleSheet.create({
     borderRightColor: 'transparent',
     borderTopColor: 'white',
   },
+
+  // [LIVELOC] styles
+  liveBadge: {
+    width: 36, height: 36, borderRadius: 18,
+    borderWidth: 2, borderColor: '#fff',
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 4, elevation: 2,
+  },
+  liveSolid:   { backgroundColor: '#22c55e' }, // green
+  liveWarm:    { backgroundColor: '#f59e0b' }, // amber
+  liveCooling: { backgroundColor: '#60a5fa' }, // blue
+  liveStale:   { backgroundColor: '#9ca3af' }, // gray
+  dot: { width: 14, height: 14, borderRadius: 7, backgroundColor: 'white' },
+  liveLabel: { marginTop: 4, fontSize: 11, color: '#111' },
+  avatarCircle: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden' },
+  avatarWrap: { flex: 1 },
+  avatarImgWrap: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#eee' },
+
 });
