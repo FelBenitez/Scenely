@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState } from 'react-native';
 import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
+import PostSheet from '../../components/PostSheet';
 
 const token =
   process.env.EXPO_PUBLIC_MAPBOX_TOKEN ??
@@ -62,6 +63,7 @@ export default function MapTab() {
   const [userLoc, setUserLoc] = useState(null);
   const [posts, setPosts] = useState([]);
   const [selectedCluster, setSelectedCluster] = useState(null);
+  const [selectedPost, setSelectedPost] = useState(null);
   const lastPostTime = useRef(0);
 
   // Live location
@@ -82,6 +84,18 @@ export default function MapTab() {
   const POLL_MS = 20_000;      // refresh others every 20s
   const MAX_LIVE_MIN = 45;     // hide after 45 minutes
   // Buckets: live<=2, warm<=10, cooling<=30, else stale<=45(hidden)
+
+
+
+  const [userId, setUserId] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUserId(user?.id ?? null);
+    })();
+  }, []);
+
 
   // Stable jitter based on user_id hash (FIXED: handles negative hashes)
   function stableJitter(userId, meters = 8) {
@@ -217,6 +231,21 @@ export default function MapTab() {
                 });
               } catch (err) {
                 console.error('Error handling realtime insert:', err);
+              }
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: 'DELETE', schema: 'public', table: 'posts' },
+            payload => {
+              try {
+                const deleted = payload.old;
+                if (!deleted?.id) return;
+                setPosts(prev => prev.filter(p => p.id !== deleted.id));
+                // If the currently open sheet is this post, close it
+                setSelectedPost(curr => (curr?.id === deleted.id ? null : curr));
+              } catch (err) {
+                console.error('Error handling realtime delete:', err);
               }
             }
           )
@@ -573,7 +602,11 @@ export default function MapTab() {
               <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() => {
-                  if (isMultiple) setSelectedCluster(cluster);
+                  if (cluster.length === 1) {
+                    setSelectedPost(cluster[0]);
+                  } else {
+                    setSelectedCluster(cluster);
+   }
                 }}
               >
                 <View style={styles.markerContainer}>
@@ -629,7 +662,7 @@ export default function MapTab() {
         </View>
       </Modal>
 
-      {/* Cluster details modal */}
+      {/* Cluster details modal
       <Modal
         transparent
         visible={!!selectedCluster}
@@ -673,7 +706,66 @@ export default function MapTab() {
             </View>
           </View>
         </View>
-      </Modal>
+      </Modal> */}
+
+       <Modal
+   transparent
+   visible={!!selectedCluster}
+   animationType="slide"
+   onRequestClose={() => setSelectedCluster(null)}
+ >
+   <View style={styles.modalBackdrop}>
+     <View style={styles.sheet}>
+       <Text style={styles.sheetTitle}>
+         {selectedCluster?.length || 0} posts in this spot
+       </Text>
+
+       <View style={{ maxHeight: 360 }}>
+         {selectedCluster?.map(p => {
+           if (!p?.id || !p?.text) return null;
+           return (
+             <TouchableOpacity
+               key={p.id}
+               activeOpacity={0.8}
+               onPress={() => {
+                 setSelectedPost(p);       // open this one
+                 setSelectedCluster(null); // close the list
+               }}
+             >
+               <View
+                 style={{
+                   paddingVertical: 10,
+                   borderBottomWidth: StyleSheet.hairlineWidth,
+                   borderBottomColor: '#e5e5e5'
+                 }}
+               >
+                 <Text style={{ fontSize: 15, color: '#111' }}>{p.text}</Text>
+                 <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>
+                   {p.created_at ? new Date(p.created_at).toLocaleTimeString() : ''}
+                 </Text>
+               </View>
+             </TouchableOpacity>
+           );
+         })}
+       </View>
+
+       <View style={styles.row}>
+         <TouchableOpacity
+           style={styles.primaryBtn}
+           onPress={() => setSelectedCluster(null)}
+         >
+           <Text style={{ color: 'white', fontWeight: '600' }}>Close</Text>
+         </TouchableOpacity>
+       </View>
+     </View>
+   </View>
+ </Modal>
+
+     <PostSheet
+   post={selectedPost}
+   onClose={() => setSelectedPost(null)}
+   userId={userId}
+ />
 
       {/* [DEV] Polling toggle */}
       <TouchableOpacity
