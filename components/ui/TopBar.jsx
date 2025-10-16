@@ -93,18 +93,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,           // thicker
     borderRadius: 24,              // a bit rounder for the thicker bar
-    minHeight: 56,                 // taller
-    backgroundColor: 'rgba(255,255,255,0.88)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.5)',
+    minHeight: 64,                 // taller
+    backgroundColor: 'rgba(255,255,255,0.75)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.8)',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOpacity: 0.12,
-        shadowRadius: 16,
-        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.18, // To change border shadow
+        shadowRadius: 20,
+        shadowOffset: { width: 0, height: 8 },
       },
-      android: { elevation: 10 },
+      android: { elevation: 12 },
     }),
     justifyContent: 'flex-start',
   },
