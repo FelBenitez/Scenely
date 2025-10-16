@@ -7,6 +7,8 @@ import { Alert, AppState } from 'react-native';
 import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import PostSheet from '../../components/PostSheet';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import TopBar from '../../components/ui/TopBar';
 
 const token =
   process.env.EXPO_PUBLIC_MAPBOX_TOKEN ??
@@ -65,6 +67,7 @@ export default function MapTab() {
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [selectedPost, setSelectedPost] = useState(null);
   const lastPostTime = useRef(0);
+  const MAX_ONLINE_MIN = 10;
 
   // Live location
   const [shareLive, setShareLive] = useState(true); // toggle to share/halt heartbeat
@@ -88,6 +91,7 @@ export default function MapTab() {
 
 
   const [userId, setUserId] = useState(null);
+
 
   useEffect(() => {
     (async () => {
@@ -133,6 +137,20 @@ export default function MapTab() {
     const gridId = `${Math.round(latCoarse/latStep)}:${Math.round(lngCoarse/lngStep)}`;
     return { lat: latJ, lng: lngJ, gridId };
   }
+
+
+
+  // Online Count 
+  const insets = useSafeAreaInsets();
+
+  const onlineCount = useMemo(() => {
+    const now = Date.now();
+    return liveUsers.filter(u => {
+      if (!u?.last_seen) return false;
+      const mins = (now - new Date(u.last_seen).getTime()) / 60000;
+      return mins <= MAX_ONLINE_MIN;
+    }).length;
+  }, [liveUsers]);
 
   // helper: classify by age (minutes)
   function classifyAge(mins) {
@@ -515,6 +533,7 @@ export default function MapTab() {
       <MapboxGL.MapView
         style={StyleSheet.absoluteFillObject}
         styleURL={MapboxGL.StyleURL.Street}
+        scaleBarEnabled={false}
       >
         <MapboxGL.Camera
           ref={cameraRef}
@@ -627,6 +646,34 @@ export default function MapTab() {
         })}
       </MapboxGL.MapView>
 
+
+      {/* Floating top bar*/}
+      <View 
+        style={{ 
+          position: 'absolute', 
+          top: insets.top + 8, 
+          left: 12, 
+          right: 12, 
+          zIndex: 999,
+          pointerEvents: 'box-none' // Allow touches to pass through to map
+        }}
+      >
+        <TopBar
+          sharing={shareLive}
+          onlineCount={onlineCount}
+          onToggle={(next) => {
+            setShareLive(next);
+            if (next && pollingActive) {
+              sendHeartbeat();
+              pollNearby();
+            }
+          }}
+          onFilterPress={() => {
+            console.log('Filter pressed');
+          }}
+        />
+      </View>
+
       <Modal
         transparent
         visible={composerOpen}
@@ -662,52 +709,6 @@ export default function MapTab() {
         </View>
       </Modal>
 
-      {/* Cluster details modal
-      <Modal
-        transparent
-        visible={!!selectedCluster}
-        animationType="slide"
-        onRequestClose={() => setSelectedCluster(null)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.sheet}>
-            <Text style={styles.sheetTitle}>
-              {selectedCluster?.length || 0} posts in this spot
-            </Text>
-
-            <View style={{ maxHeight: 320 }}>
-              {selectedCluster?.map(p => {
-                if (!p?.id || !p?.text) return null;
-                return (
-                  <View
-                    key={p.id}
-                    style={{
-                      paddingVertical: 10,
-                      borderBottomWidth: StyleSheet.hairlineWidth,
-                      borderBottomColor: '#e5e5e5'
-                    }}
-                  >
-                    <Text style={{ fontSize: 15, color: '#111' }}>{p.text}</Text>
-                    <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>
-                      {p.created_at ? new Date(p.created_at).toLocaleTimeString() : ''}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-
-            <View style={styles.row}>
-              <TouchableOpacity
-                style={styles.primaryBtn}
-                onPress={() => setSelectedCluster(null)}
-              >
-                <Text style={{ color: 'white', fontWeight: '600' }}>Close</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal> */}
-
        <Modal
    transparent
    visible={!!selectedCluster}
@@ -728,7 +729,7 @@ export default function MapTab() {
                key={p.id}
                activeOpacity={0.8}
                onPress={() => {
-                 setSelectedPost(p);       // open this one
+                 setSelectedPost(p); // open this one
                  setSelectedCluster(null); // close the list
                }}
              >
