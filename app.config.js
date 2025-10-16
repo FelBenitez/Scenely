@@ -50,6 +50,7 @@ export default () => ({
       "expo-notifications",
       "expo-image-picker",
       "expo-localization",
+      "expo-font",
 
       "expo-router",
       [

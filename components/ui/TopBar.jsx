@@ -1,5 +1,9 @@
-import React, { useEffect, useMemo } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Platform, Easing } from 'react-native';
+import { useFonts, Inter_700Bold } from '@expo-google-fonts/inter';
+import { SlidersHorizontal } from 'lucide-react-native';
+import { Feather } from '@expo/vector-icons';
+
 
 const SWITCH_W = 130;   // switch width
 const SWITCH_H = 40;    // switch height
@@ -8,28 +12,42 @@ const KNOB     = 32;    // bigger knob
 const TRAVEL   = SWITCH_W - KNOB - PADDING * 2; // how far the knob slides
 
 export default function TopBar({ sharing, onlineCount, onToggle, onFilterPress }) {
-  const knobX = useMemo(() => new Animated.Value(sharing ? 1 : 0), []);
+  // CHANGE: drive the whole animation with a single progress value (0=OFF, 1=ON)
+  //const progress = useMemo(() => new Animated.Value(sharing ? 1 : 0), []);
+    const progress = useRef(new Animated.Value(sharing ? 1 : 0)).current;
 
   useEffect(() => {
-    Animated.spring(knobX, {
-      toValue: sharing ? 1 : 0,
-      friction: 7,
-      tension: 80,
-      useNativeDriver: true,
-    }).start();
-  }, [sharing]);
+   Animated.timing(progress, {
+     toValue: sharing ? 1 : 0,
+     duration: 220,                    // tweak 320–420ms to taste
+     easing: Easing.inOut(Easing.ease),// smooth slide
+     useNativeDriver: true,
+   }).start();
+ }, [sharing]);
 
-  const knobTranslate = knobX.interpolate({
+  // CHANGE: knob translate and micro-scale for a “buttery” slide
+  const knobTranslate = progress.interpolate({
     inputRange: [0, 1],
     outputRange: [0, TRAVEL], // 0..TRAVEL px
   });
+  const knobScale = progress.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [1, 0.98, 1],
+  });
+
+  let [fontsLoaded] = useFonts({
+    Inter_700Bold,
+  });
+
+  if (!fontsLoaded) return null;
+
 
   // Label sits on the opposite side of the knob
-  const labelText = sharing ? 'Sharing: ON' : 'Sharing: OFF';
-  const labelColor = sharing ? '#FFFFFF' : '#6B7280';
-  const labelStyle = sharing
-    ? { textAlign: 'left',  paddingLeft: 10, paddingRight: KNOB + 12 }
-    : { textAlign: 'right', paddingRight: 10, paddingLeft: KNOB + 12 };
+  // CHANGE: use cross-fade + slight slide for ON/OFF instead of swapping one text
+  const onOpacity = progress; // 0 -> 1
+  const offOpacity = progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
+  const onTx = progress.interpolate({ inputRange: [0, 1], outputRange: [-6, 0] });
+  const offTx = progress.interpolate({ inputRange: [0, 1], outputRange: [0, 6] });
 
   return (
     <View style={styles.container}>
@@ -39,7 +57,8 @@ export default function TopBar({ sharing, onlineCount, onToggle, onFilterPress }
           <Text style={styles.logo}>Scenely</Text>
           {typeof onlineCount === 'number' && (
             <View style={styles.badge}>
-              <Text style={styles.badgeText}>👥 {onlineCount}</Text>
+              <Feather name="users" size={13} color="#BF5700" style={{ marginRight: 4 }} />
+              <Text style={styles.badgeText}>{onlineCount}</Text>
             </View>
           )}
         </View>
@@ -55,25 +74,42 @@ export default function TopBar({ sharing, onlineCount, onToggle, onFilterPress }
           ]}
         >
           {/* Track fill */}
-          <View style={[styles.track, { backgroundColor: sharing ? '#FF6B35' : '#E5E5E5' }]} />
+          <View style={[styles.track, { backgroundColor: sharing ? '#BF5700' : '#E5E5E5' }]} />
 
           {/* Knob */}
           <Animated.View
             style={[
               styles.knob,
-              { transform: [{ translateX: knobTranslate }] }
+              { transform: [{ translateX: knobTranslate }, { scale: knobScale }] }
             ]}
           />
 
           {/* Label (kept clear of knob) */}
-          <Text style={[styles.toggleText, { color: labelColor }, labelStyle]}>
-            {labelText}
-          </Text>
+          {/* CHANGE: Two animated labels—ON and OFF—cross-fade & slide for smoothness */}
+          <Animated.Text
+            style={[
+              styles.toggleText,
+              { color: '#FFFFFF', textAlign: 'left', paddingLeft: 10, paddingRight: KNOB + 12,
+                opacity: onOpacity, transform: [{ translateX: onTx }] }
+            ]}
+          >
+            Sharing: ON
+          </Animated.Text>
+
+          <Animated.Text
+            style={[
+              styles.toggleText,
+              { color: '#6B7280', textAlign: 'right', paddingRight: 10, paddingLeft: KNOB + 12,
+                opacity: offOpacity, transform: [{ translateX: offTx }] }
+            ]}
+          >
+            Sharing: OFF
+          </Animated.Text>
         </TouchableOpacity>
 
         {/* RIGHT: Filter */}
         <TouchableOpacity style={styles.filterBtn} onPress={onFilterPress} activeOpacity={0.75}>
-          <Text style={styles.filterIcon}>⚙️</Text>
+          <SlidersHorizontal size={20} color="#BF5700" strokeWidth={2.5} />
         </TouchableOpacity>
       </View>
     </View>
@@ -112,18 +148,22 @@ const styles = StyleSheet.create({
   // LEFT
   leftSection: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   logo: {
-    fontSize: 20,
-    fontWeight: '800',
+    fontSize: 25,
+    fontWeight: '700',
     color: '#BF5700',
-    letterSpacing: 1.0, // more spacing between letters
+    letterSpacing: -0.5, // more spacing between letters
+    fontFamily: 'Inter_700Bold',
   },
   badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 999,
     backgroundColor: 'rgba(191,87,0,0.12)',
   },
-  badgeText: { fontSize: 12, fontWeight: '700', color: '#BF5700' },
+  badgeText: { fontSize: 12, fontWeight: '700', color: '#BF5700', includeFontPadding: false, lineHeight: 14 },
 
   // CENTER TOGGLE
   toggle: {
@@ -166,6 +206,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
     flexWrap: 'nowrap',
     lineHeight: 40, // match SWITCH_H for perfect vertical centering
+    fontFamily: 'Inter_700Bold',
   },
 
   // RIGHT
