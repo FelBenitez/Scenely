@@ -9,6 +9,11 @@ import { supabase } from '../../lib/supabase';
 import PostSheet from '../../components/PostSheet';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import TopBar from '../../components/ui/TopBar';
+import FAB from '../../components/ui/FAB';
+import ComposerSheet from '../../components/ui/ComposerSheet';
+import Toast from '../../components/ui/Toast';
+import ConfettiBurst from '../../components/ui/ConfettiBurst';
+import { hapticSuccess } from '../../components/ui/Haptics';
 
 const token =
   process.env.EXPO_PUBLIC_MAPBOX_TOKEN ??
@@ -61,6 +66,8 @@ function distanceInMeters(lat1, lng1, lat2, lng2) {
 export default function MapTab() {
   const cameraRef = useRef(null);
   const [composerOpen, setComposerOpen] = useState(false);
+  const toastRef = useRef(null);
+  const [confettiKey, setConfettiKey] = useState(0);
   const [draftText, setDraftText] = useState('');
   const [userLoc, setUserLoc] = useState(null);
   const [posts, setPosts] = useState([]);
@@ -470,7 +477,7 @@ export default function MapTab() {
     };
   }, []);
 
-  const submitPost = async () => {
+  const submitPostExtended = async (textIn, category = 'freebies', photoUri = null) => {
     try {
       // Rate limiting: 10 seconds between posts
       const now = Date.now();
@@ -494,13 +501,20 @@ export default function MapTab() {
         }
       }
 
-      const text = draftText.trim();
+      const text = (textIn ?? draftText).trim();
       if (!text) return;
 
       const { data, error } = await supabase
-        .from('posts')
-        .insert([{ text, lat, lng }])
-        .select();
+      .from('posts')
+      .insert([{
+        text,
+        lat,
+        lng,
+        category,             // <- from composer
+        photo_url: null       // <- replace with uploaded URL when you wire photos
+        // expires_at will auto-default to +4h
+      }])
+      .select();
 
       if (error) {
         console.error('Error posting:', error);
@@ -512,14 +526,18 @@ export default function MapTab() {
         lastPostTime.current = now;
         setPosts(prev => [data[0], ...prev]);
         setDraftText('');
-        setComposerOpen(false);
+        // setComposerOpen(false);
 
         cameraRef.current?.setCamera({
           centerCoordinate: [lng, lat],
           zoomLevel: 16,
           animationDuration: 500,
         });
-
+        
+        // celebration
+        hapticSuccess();
+        toastRef.current?.show('Dropped! Visible for 4h 🎉');
+        setConfettiKey(k => k + 1);
         console.log('Posted to Supabase:', data[0]);
       }
     } catch (error) {
@@ -674,7 +692,7 @@ export default function MapTab() {
         />
       </View>
 
-      <Modal
+      {/* <Modal
         transparent
         visible={composerOpen}
         animationType="slide"
@@ -707,7 +725,9 @@ export default function MapTab() {
             </View>
           </View>
         </View>
-      </Modal>
+      </Modal> */}
+
+
 
        <Modal
    transparent
@@ -768,6 +788,7 @@ export default function MapTab() {
    userId={userId}
  />
 
+
       {/* [DEV] Polling toggle */}
       <TouchableOpacity
         style={[
@@ -789,12 +810,32 @@ export default function MapTab() {
         <Text style={styles.fabText}>{shareLive ? 'On' : 'Off'}</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity
+      {/* <TouchableOpacity
         style={styles.fab}
         onPress={() => setComposerOpen(true)}
       >
         <Text style={styles.fabText}>+</Text>
-      </TouchableOpacity>
+      </TouchableOpacity> */}
+
+      {/* Composer (bottom sheet) */}
+      <ComposerSheet
+        visible={composerOpen}
+        onClose={() => setComposerOpen(false)}
+        onSubmit={async ({ text, category, photoUri }) => {
+          setComposerOpen(false);
+          // call your existing submit logic, extended for category/photo
+          await submitPostExtended(text, category, photoUri);
+        }}
+      />
+
+      {/* Toast + Confetti overlays */}
+      <Toast ref={toastRef} />
+      <ConfettiBurst fire={confettiKey} />
+
+      {/* Primary FAB */}
+      <FAB visible={!composerOpen} onPress={() => setComposerOpen(true)} />
+
+
     </View>
   );
 }
@@ -808,7 +849,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#1976D2',
+    backgroundColor: '#BF5700',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
