@@ -8,6 +8,7 @@ import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { MessageCircle, MapPin, Calendar, Pizza, Camera } from 'lucide-react-native'; 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import usePressScale from '../../hooks/usePressScale';
 
 const AnimatedBlur = Animated.createAnimatedComponent(BlurView);
 
@@ -40,6 +41,12 @@ export default function ComposerSheet({ visible, onClose, onSubmit }) {
   const [mounted, setMounted] = useState(visible);
   const backdrop = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(40)).current;
+  const { scale, pressIn, pressOut, reset } = usePressScale(0.96);
+
+  useEffect(() => {
+    reset(); // Reset button scale whenever visibility changes
+  }, [visible]);
+
 
   useEffect(() => {
     if (visible) setMounted(true);
@@ -127,7 +134,7 @@ export default function ComposerSheet({ visible, onClose, onSubmit }) {
           </View>
 
           {/* Input */}
-          <View style={styles.inputWrap}>
+          <View style={[styles.inputWrap, { backgroundColor: `${cat.tint}15` }]}>
             <TextInput
               value={text}
               onChangeText={setText}
@@ -152,14 +159,24 @@ export default function ComposerSheet({ visible, onClose, onSubmit }) {
           {/* CTA */}
           <TouchableOpacity
             activeOpacity={0.9}
+            onPressIn={pressIn}
+            onPressOut={pressOut}
             onPress={submit}
             disabled={!canSubmit}
-            style={[
-              styles.cta,
-              { backgroundColor: canSubmit ? cat.tint : '#D1D5DB', opacity: canSubmit ? 1 : 0.5 },
-            ]}
           >
+            <Animated.View
+            style={[
+            styles.cta,
+            { 
+                transform: [{ scale }], 
+                backgroundColor: canSubmit ? cat.tint : '#D1D5DB',
+                opacity: canSubmit ? 1 : 0.5
+            }
+            ]}
+        >
             <Text style={styles.ctaText}>Post</Text>
+            
+            </Animated.View>
           </TouchableOpacity>
 
           <TouchableOpacity onPress={requestClose} style={styles.cancel}>

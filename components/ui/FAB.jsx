@@ -1,11 +1,17 @@
 // components/ui/FAB.jsx
-import React from 'react';
+import React, {useEffect}from 'react';
 import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import usePressScale from '../../hooks/usePressScale';
 import { hapticLight } from './Haptics';
 
 export default function FAB({ onPress, visible = true }) {
-  const { scale, pressIn, pressOut } = usePressScale(0.94);
+  const { scale, pressIn, pressOut, reset } = usePressScale(0.90);
+
+    useEffect(() => {
+    if (visible) {
+      reset();
+    }
+  }, [visible]);
 
   if (!visible) return null;
 
@@ -33,18 +39,18 @@ const styles = StyleSheet.create({
     bottom: 24,
   },
   btn: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     backgroundColor: ORANGE,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOpacity: 0.25,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
     elevation: 6,
   },
-  plusH: { position: 'absolute', width: 28, height: 3, backgroundColor: '#fff', borderRadius: 2 },
-  plusV: { position: 'absolute', width: 3, height: 28, backgroundColor: '#fff', borderRadius: 2 },
+  plusH: { position: 'absolute', width: 30, height: 4, backgroundColor: '#fff', borderRadius: 2 },
+  plusV: { position: 'absolute', width: 4, height: 28, backgroundColor: '#fff', borderRadius: 2 },
 });
