@@ -51,7 +51,15 @@ export default () => ({
       "expo-image-picker",
       "expo-localization",
       "expo-font",
-
+      "expo-build-properties",
+      
+      [
+        "expo-build-properties",
+        {
+          "android": { "kotlinVersion": "1.7.22" },
+          "ios": { "useFrameworks": "static" }
+        }
+      ],
       "expo-router",
       [
         "expo-splash-screen",

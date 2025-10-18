@@ -206,7 +206,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
     flexWrap: 'nowrap',
     lineHeight: 40, // match SWITCH_H for perfect vertical centering
-    fontFamily: 'Inter_700Bold',
+    fontFamily: 'Inter_700Medium',
   },
 
   // RIGHT
