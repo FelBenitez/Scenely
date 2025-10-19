@@ -3,17 +3,22 @@ import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, AppState } from 'react-native';
-import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { supabase } from '../../lib/supabase';
-import PostSheet from '../../components/PostSheet';
+import { Alert, AppState, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import TopBar from '../../components/ui/TopBar';
-import FAB from '../../components/ui/FAB';
+import PostSheet from '../../components/PostSheet';
 import ComposerSheet from '../../components/ui/ComposerSheet';
-import Toast from '../../components/ui/Toast';
 import ConfettiBurst from '../../components/ui/ConfettiBurst';
+import FAB from '../../components/ui/FAB';
 import { hapticSuccess } from '../../components/ui/Haptics';
+import Toast from '../../components/ui/Toast';
+import TopBar from '../../components/ui/TopBar';
+import { supabase } from '../../lib/supabase';
+import PinMarker from '../../components/ui/PinMarker';
+
+
+// Sprite(s) for post pins
+const PIN_EVENT_100 = require('../../assets/images/pins/pin_event_100.png');
+
 
 const token =
   process.env.EXPO_PUBLIC_MAPBOX_TOKEN ??
@@ -63,6 +68,46 @@ function distanceInMeters(lat1, lng1, lat2, lng2) {
   return R * c;
 }
 
+// MAKING HYBRID GPU PINS
+
+// --- GPU base: derive freshness bucket + priority and build GeoJSON ---
+function getMinutesLeft(created_at) {
+  if (!created_at) return 0;
+  const minsSince = (Date.now() - new Date(created_at).getTime()) / 60000;
+  const left = 240 - minsSince; // 4h window
+  return Math.max(0, Math.round(left));
+}
+
+function getFreshBucket(minutesLeft) {
+  if (minutesLeft > 180) return 100;
+  if (minutesLeft > 120) return 75;
+  if (minutesLeft > 60)  return 50;
+  if (minutesLeft > 30)  return 25;
+  return 0; // "expiring"
+}
+
+// Simple priority (tune later / remote-config)
+function computePriority(p, mapCenter = { latitude: 30.2849, longitude: -97.7341 }) {
+  const minsLeft = getMinutesLeft(p.created_at);
+  const freshnessScore = Math.max(0, minsLeft) * 200;
+  const engagement = (p.reactions || 0) + 2 * (p.comments || 0);
+
+  // rough distance penalty (don’t overthink; we’ll refine later)
+  const dx = (p.lng - mapCenter.longitude) * Math.cos((mapCenter.latitude * Math.PI) / 180);
+  const dy = (p.lat - mapCenter.latitude);
+  const distScore = Math.max(0, 1000 - Math.sqrt(dx*dx + dy*dy) * 111000); // meters-ish
+
+  const friendBoost = p.isFriend ? 100000 : 0;
+
+  return friendBoost + freshnessScore + engagement * 150 + distScore;
+}
+
+
+/////
+
+
+
+
 export default function MapTab() {
   const cameraRef = useRef(null);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -98,6 +143,29 @@ export default function MapTab() {
 
 
   const [userId, setUserId] = useState(null);
+
+  // Derived id as string for filtering the selected sprite out
+  const selectedId = selectedPost?.id ? String(selectedPost.id) : null;
+  
+  // open PostSheet only when user confirms (second tap)
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  const [cameraInfo, setCameraInfo] = useState({
+    center: [-97.7341, 30.2849],
+    zoom: 14,
+  });
+
+  // threshold at which GPU -> React upgrade kicks in
+  const UPGRADE_ZOOM = 15;
+
+  // Ensure upgrades always reset when you zoom out; they'll reappear when you zoom back in
+  useEffect(() => {
+    const z = cameraInfo?.zoom;
+    if (typeof z === 'number' && z < UPGRADE_ZOOM) {
+      setSelectedPost(null);
+      setSheetOpen(false);
+    }
+  }, [cameraInfo?.zoom]);
 
 
   useEffect(() => {
@@ -158,6 +226,82 @@ export default function MapTab() {
       return mins <= MAX_ONLINE_MIN;
     }).length;
   }, [liveUsers]);
+
+
+
+
+
+
+// Which posts should “upgrade” into React markers right now?
+const upgradeIds = useMemo(() => {
+  const { center, zoom } = cameraInfo;
+  if (!center || typeof zoom !== 'number') return [];
+
+  // Only upgrade when fairly zoomed in
+  if (zoom < 15) return [];
+
+  const centerLng = center[0];
+  const centerLat = center[1];
+
+  // score: priority first, then closeness to center; within ~600m
+  const scored = (posts || [])
+    .filter(p => Number.isFinite(p?.lat) && Number.isFinite(p?.lng))
+    .map(p => {
+      const dist = distanceInMeters(p.lat, p.lng, centerLat, centerLng);
+      const pr = computePriority(p, { latitude: centerLat, longitude: centerLng });
+      return { id: String(p.id), post: p, dist, pr };
+    })
+    .filter(x => x.dist <= 600);
+
+  scored.sort((a, b) => {
+    if (b.pr !== a.pr) return b.pr - a.pr;
+    return a.dist - b.dist;
+  });
+
+  // keep it small for perf (6–10 is good)
+  const top = scored.slice(0, 8).map(x => x.id);
+
+  // always include the focused post if any
+  if (selectedPost?.id && !top.includes(String(selectedPost.id))) {
+    top.unshift(String(selectedPost.id));
+  }
+  return top;
+}, [posts, cameraInfo, selectedPost]);
+
+// Hide upgraded ids from the GPU sprite layer
+const spriteFilter = useMemo(() => {
+  const base = ['!', ['has', 'point_count']]; // only real features
+  if (!upgradeIds || upgradeIds.length === 0) return base;
+  // hide any features whose id is in upgradeIds
+  return ['all', base, ['!', ['in', ['get', 'id'], ['literal', upgradeIds]]]];
+}, [upgradeIds]);
+
+
+  // Memoized GeoJSON for posts -> Mapbox ShapeSource
+const postsGeoJSON = useMemo(() => {
+  const center = userLoc ?? { latitude: 30.2849, longitude: -97.7341 };
+  return {
+    type: 'FeatureCollection',
+    features: (posts || [])
+      .filter(p => Number.isFinite(p?.lat) && Number.isFinite(p?.lng))
+      .map(p => {
+        const minutesLeft = getMinutesLeft(p.created_at);
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+          properties: {
+            id: String(p.id),
+            category: p.category || 'event',
+            minutesLeft,
+            freshBucket: getFreshBucket(minutesLeft), // for sprite variant later
+            priority: computePriority(p, center),
+          },
+        };
+      }),
+  };
+}, [posts, userLoc]);
+
+
 
   // helper: classify by age (minutes)
   function classifyAge(mins) {
@@ -552,6 +696,13 @@ export default function MapTab() {
         style={StyleSheet.absoluteFillObject}
         styleURL={MapboxGL.StyleURL.Street}
         scaleBarEnabled={false}
+        onCameraChanged={(e) => {
+          const { zoom, center } = e?.properties ?? {};
+          if (Array.isArray(center) && typeof zoom === 'number') {
+            setCameraInfo({ center, zoom });
+          }
+        }}
+        onPress={() => { setSelectedPost(null); setSheetOpen(false); }}
       >
         <MapboxGL.Camera
           ref={cameraRef}
@@ -572,6 +723,120 @@ export default function MapTab() {
             }
           }}
         />
+
+
+
+        {/* REGISTER PIN SPRITES ONCE */}
+        <MapboxGL.Images
+          images={{
+            // temp: one key points to one sprite file
+            pin_event_100: PIN_EVENT_100, // key used by SymbolLayer
+          }}
+        />
+
+
+        {/* POSTS via GPU layers (fast) */}
+      <MapboxGL.ShapeSource
+        id="posts-src"
+        shape={postsGeoJSON}
+        // start with no clustering; we’ll add later once sprites are in
+        cluster={false}
+    
+        onPress={(e) => {
+        const f = e?.features?.[0];
+        if (!f) return;
+        const id = f.properties?.id;
+        const post = posts.find(p => String(p.id) === id);
+        if (!post) return;
+
+        // First tap focuses (upgrades pin). Second tap opens sheet.
+        if (selectedPost && String(selectedPost.id) === String(post.id)) {
+          setSheetOpen(true); // second tap -> open sheet
+        } else {
+          setSelectedPost(post);   // focus/upgrade
+          setSheetOpen(false);     // don't open sheet yet
+        }
+}}
+      >
+        {/* TEARDROP SYMBOLS (using the one test sprite for all posts right now) */}
+      <MapboxGL.SymbolLayer
+      id="posts-symbols"
+      filter={spriteFilter}
+      style={{
+        iconImage: 'pin_event_100',
+        iconSize: [
+          'interpolate', ['linear'], ['zoom'],
+          12, 0.10,
+          14, 0.12,
+          16, 0.14,
+          18, 0.16,
+        ],
+        iconAnchor: 'bottom',
+        iconPitchAlignment: 'viewport',
+        iconAllowOverlap: false,
+        iconIgnorePlacement: false,
+        symbolSortKey: ['get', 'priority'],
+      }}
+    />
+
+        {/* Tiny “Xm” label for expiring posts (<= 30 min) */}
+        <MapboxGL.SymbolLayer
+          id="posts-expiring-label"
+          filter={[
+            'all',
+            ['!', ['has', 'point_count']],
+            ['<=', ['get', 'minutesLeft'], 30],
+            ['>',  ['get', 'minutesLeft'], 0],
+          ]}
+          style={{
+            textField: ['concat', ['to-string', ['get', 'minutesLeft']], 'm'],
+            textSize: 11,
+            textColor: '#1A1A1A',
+            textHaloColor: '#FFFFFF',
+            textHaloWidth: 1.5,
+            textAllowOverlap: false,
+            textOffset: [0, -1.6], // nudge above the circle a bit
+          }}
+        />
+      </MapboxGL.ShapeSource>
+
+      {/* Upgrade layer: show PinMarker for top-N */}
+      {upgradeIds.map(uid => {
+        const p = posts.find(pp => String(pp.id) === uid);
+        if (!p || !Number.isFinite(p.lng) || !Number.isFinite(p.lat)) return null;
+        return (
+          <MapboxGL.MarkerView
+            key={`up-${uid}`}
+            id={`up-${uid}`}
+            coordinate={[p.lng, p.lat]}
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <PinMarker
+              post={p}
+              selected={selectedPost && String(selectedPost.id) === uid}
+              onPress={() => {
+                if (selectedPost && String(selectedPost.id) === uid) {
+                  setSheetOpen(true);
+                } else {
+                  setSelectedPost(p);
+                  setSheetOpen(false);
+                }
+              }}
+            />
+          </MapboxGL.MarkerView>
+        );
+      })}
+
+
+
+
+
+
+
+
+
+
+
 
         {/* [LIVELOC] render live users with age buckets */}
         {liveUsers.map((u) => {
@@ -621,7 +886,7 @@ export default function MapTab() {
           );
         })}
 
-        {clusters.map((cluster, idx) => {
+        {/* {clusters.map((cluster, idx) => {
           if (!cluster || cluster.length === 0) return null;
 
           const post = cluster[0];
@@ -630,6 +895,8 @@ export default function MapTab() {
           const isMultiple = cluster.length > 1;
 
           return (
+
+
             <MapboxGL.MarkerView
               key={`cluster-${idx}-${post.id}`}
               id={`cluster-${idx}-${post.id}`}
@@ -660,8 +927,14 @@ export default function MapTab() {
                 </View>
               </TouchableOpacity>
             </MapboxGL.MarkerView>
+
+
+
           );
-        })}
+        })} */}
+
+
+
       </MapboxGL.MapView>
 
 
@@ -783,8 +1056,8 @@ export default function MapTab() {
  </Modal>
 
      <PostSheet
-   post={selectedPost}
-   onClose={() => setSelectedPost(null)}
+   post={sheetOpen ? selectedPost : null}
+   onClose={() => { setSheetOpen(false); setSelectedPost(null); }}
    userId={userId}
  />
 

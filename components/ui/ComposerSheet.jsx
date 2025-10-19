@@ -45,7 +45,7 @@ export default function ComposerSheet({ visible, onClose, onSubmit }) {
 
   useEffect(() => {
     reset(); // Reset button scale whenever visibility changes
-  }, [visible]);
+  }, [visible, reset]);
 
 
   useEffect(() => {

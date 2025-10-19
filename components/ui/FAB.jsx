@@ -11,7 +11,7 @@ export default function FAB({ onPress, visible = true }) {
     if (visible) {
       reset();
     }
-  }, [visible]);
+  }, [visible, reset]);
 
   if (!visible) return null;
 
