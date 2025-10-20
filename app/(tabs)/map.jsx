@@ -13,7 +13,7 @@ import { hapticSuccess } from '../../components/ui/Haptics';
 import Toast from '../../components/ui/Toast';
 import TopBar from '../../components/ui/TopBar';
 import { supabase } from '../../lib/supabase';
-import PinMarker from '../../components/ui/PinMarker';
+import PinMarker, { categoryTint } from '../../components/ui/PinMarker';
 
 
 // Sprite(s) for post pins
@@ -105,7 +105,47 @@ function computePriority(p, mapCenter = { latitude: 30.2849, longitude: -97.7341
 
 /////
 
+// --- Expiration helpers for progress ring (used by PinMarker) ---
+function minutesLeftForPost(p, totalMinutesDefault = 240) {
+  const now = Date.now();
+  const createdMs = p?.created_at ? new Date(p.created_at).getTime() : now;
+  const expiresMs = p?.expires_at
+    ? new Date(p.expires_at).getTime()
+    : createdMs + totalMinutesDefault * 60_000;
 
+  const leftMs = Math.max(0, expiresMs - now);
+  return Math.round(leftMs / 60_000);
+}
+
+function totalMinutesForPost(p, fallback = 240) {
+  if (p?.expires_at && p?.created_at) {
+    const start = new Date(p.created_at).getTime();
+    const end   = new Date(p.expires_at).getTime();
+    const mins  = Math.max(1, Math.round((end - start) / 60_000));
+    return mins;
+  }
+  return fallback;
+}
+
+// Fetch a user's avatar_url from profiles (used for realtime inserts)
+async function fetchAvatarForUser(user_id) {
+  try {
+    if (!user_id) return null;
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('avatar_url, username')
+      .eq('id', user_id)
+      .single();
+    if (error) {
+      console.error('[profiles] fetch avatar failed:', error.message);
+      return null;
+    }
+    return data?.avatar_url || null;
+  } catch (e) {
+    console.error('[profiles] fetch avatar error:', e);
+    return null;
+  }
+}
 
 
 export default function MapTab() {
@@ -160,6 +200,13 @@ export default function MapTab() {
 
   // DEV: live-design mode (force upgrades everywhere)
   const [designMode, setDesignMode] = useState(false);
+
+  // Global minute tick (keeps PinMarker progress cheap and in sync)
+  const [minuteTick, setMinuteTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setMinuteTick(t => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Ensure upgrades always reset when you zoom out; they'll reappear when you zoom back in
   useEffect(() => {
@@ -392,7 +439,7 @@ const postsGeoJSON = useMemo(() => {
 
         const { data, error } = await supabase
           .from('posts')
-          .select('*')
+          .select('id, text, lat, lng, created_at, expires_at, user_id, category, photo_url, profiles:user_id(avatar_url, username)')
           .gt('created_at', fourHoursAgo)
           .order('created_at', { ascending: false })
           .limit(400);
@@ -400,7 +447,12 @@ const postsGeoJSON = useMemo(() => {
         if (error) {
           console.error('Error fetching posts:', error);
         } else {
-          setPosts(data || []);
+          const withAvatars = (data || []).map(p => ({
+            ...p,
+            avatar_url: p?.profiles?.avatar_url ?? null,
+            username: p?.profiles?.username ?? null,
+          }));
+          setPosts(withAvatars);
         }
       } catch (error) {
         console.error('Unexpected error fetching posts:', error);
@@ -421,10 +473,16 @@ const postsGeoJSON = useMemo(() => {
           .on(
             'postgres_changes',
             { event: 'INSERT', schema: 'public', table: 'posts' },
-            payload => {
+            async payload => {
               try {
                 const post = payload.new;
                 if (!post?.id || !Number.isFinite(post?.lat) || !Number.isFinite(post?.lng)) return;
+
+                // Attach avatar_url by looking up the user's profile once
+                try {
+                  const av = await fetchAvatarForUser(post?.user_id);
+                  if (av) post.avatar_url = av;
+                } catch {}
 
                 setPosts(prev => {
                   if (prev.some(p => p.id === post.id)) return prev;
@@ -841,6 +899,13 @@ const postsGeoJSON = useMemo(() => {
       {upgradeIds.map(uid => {
         const p = posts.find(pp => String(pp.id) === uid);
         if (!p || !Number.isFinite(p.lng) || !Number.isFinite(p.lat)) return null;
+
+        // Recompute on minute tick so the progress ring steps once/min while visible
+        const _tick = minuteTick; // keep this reference so this block re-renders each minute
+        const minsLeft  = minutesLeftForPost(p, 240);
+        const totalMins = totalMinutesForPost(p, 240);
+        const tint = categoryTint(p.category || 'event');
+
         return (
           <MapboxGL.MarkerView
             key={`up-${uid}`}
@@ -850,6 +915,12 @@ const postsGeoJSON = useMemo(() => {
           >
             <PinMarker
               post={p}
+              tint={tint}
+              avatarUrl={p.avatar_url}
+              text={p.text}
+              photoUrl={p.photo_url}
+              minutesLeft={minsLeft}
+              totalMinutes={totalMins}
               selected={selectedPost && String(selectedPost.id) === uid}
               onPress={() => {
                 if (selectedPost && String(selectedPost.id) === uid) {
