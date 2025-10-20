@@ -156,16 +156,20 @@ export default function MapTab() {
   });
 
   // threshold at which GPU -> React upgrade kicks in
-  const UPGRADE_ZOOM = 15;
+  const UPGRADE_ZOOM = designMode ? 0 : 15;
+
+  // DEV: live-design mode (force upgrades everywhere)
+  const [designMode, setDesignMode] = useState(false);
 
   // Ensure upgrades always reset when you zoom out; they'll reappear when you zoom back in
   useEffect(() => {
+    if (designMode) return; // <-- don't clear in design mode
     const z = cameraInfo?.zoom;
     if (typeof z === 'number' && z < UPGRADE_ZOOM) {
       setSelectedPost(null);
       setSheetOpen(false);
     }
-  }, [cameraInfo?.zoom]);
+  }, [cameraInfo?.zoom, designMode]);
 
 
   useEffect(() => {
@@ -233,17 +237,56 @@ export default function MapTab() {
 
 
 // Which posts should “upgrade” into React markers right now?
+// const upgradeIds = useMemo(() => {
+//   const { center, zoom } = cameraInfo;
+//   if (!center || typeof zoom !== 'number') return [];
+
+//   // Only upgrade when fairly zoomed in
+//   if (zoom < 15) return [];
+
+//   const centerLng = center[0];
+//   const centerLat = center[1];
+
+//   // score: priority first, then closeness to center; within ~600m
+//   const scored = (posts || [])
+//     .filter(p => Number.isFinite(p?.lat) && Number.isFinite(p?.lng))
+//     .map(p => {
+//       const dist = distanceInMeters(p.lat, p.lng, centerLat, centerLng);
+//       const pr = computePriority(p, { latitude: centerLat, longitude: centerLng });
+//       return { id: String(p.id), post: p, dist, pr };
+//     })
+//     .filter(x => x.dist <= 600);
+
+//   scored.sort((a, b) => {
+//     if (b.pr !== a.pr) return b.pr - a.pr;
+//     return a.dist - b.dist;
+//   });
+
+//   // keep it small for perf (6–10 is good)
+//   const top = scored.slice(0, 8).map(x => x.id);
+
+//   // always include the focused post if any
+//   if (selectedPost?.id && !top.includes(String(selectedPost.id))) {
+//     top.unshift(String(selectedPost.id));
+//   }
+//   return top;
+// }, [posts, cameraInfo, selectedPost]);
+
+// upgradeIDs with designing mode
 const upgradeIds = useMemo(() => {
   const { center, zoom } = cameraInfo;
   if (!center || typeof zoom !== 'number') return [];
 
-  // Only upgrade when fairly zoomed in
-  if (zoom < 15) return [];
+  // Only gate by zoom when NOT in design mode
+  if (!designMode && zoom < UPGRADE_ZOOM) return [];
 
   const centerLng = center[0];
   const centerLat = center[1];
 
-  // score: priority first, then closeness to center; within ~600m
+  // Wider net in design mode (no 600m cutoff, and larger cap)
+  const maxDistMeters = designMode ? Infinity : 600;
+  const cap = designMode ? 20 : 8;
+
   const scored = (posts || [])
     .filter(p => Number.isFinite(p?.lat) && Number.isFinite(p?.lng))
     .map(p => {
@@ -251,22 +294,16 @@ const upgradeIds = useMemo(() => {
       const pr = computePriority(p, { latitude: centerLat, longitude: centerLng });
       return { id: String(p.id), post: p, dist, pr };
     })
-    .filter(x => x.dist <= 600);
+    .filter(x => x.dist <= maxDistMeters);
 
-  scored.sort((a, b) => {
-    if (b.pr !== a.pr) return b.pr - a.pr;
-    return a.dist - b.dist;
-  });
+  scored.sort((a, b) => (b.pr !== a.pr ? b.pr - a.pr : a.dist - b.dist));
 
-  // keep it small for perf (6–10 is good)
-  const top = scored.slice(0, 8).map(x => x.id);
-
-  // always include the focused post if any
+  const top = scored.slice(0, cap).map(x => x.id);
   if (selectedPost?.id && !top.includes(String(selectedPost.id))) {
     top.unshift(String(selectedPost.id));
   }
   return top;
-}, [posts, cameraInfo, selectedPost]);
+}, [posts, cameraInfo, selectedPost, designMode, UPGRADE_ZOOM]);
 
 // Hide upgraded ids from the GPU sprite layer
 const spriteFilter = useMemo(() => {
@@ -1061,6 +1098,18 @@ const postsGeoJSON = useMemo(() => {
    userId={userId}
  />
 
+      {/* Designing button */}
+      <TouchableOpacity
+      style={[
+        styles.fab,
+        { right: 16, bottom: 104, backgroundColor: designMode ? '#8B5CF6' : '#9CA3AF' },
+      ]}
+      onPress={() => setDesignMode(v => !v)}
+    >
+      <Text style={{ color: 'white', fontSize: 12, fontWeight: '700', textAlign: 'center' }}>
+        {designMode ? 'Design\nON' : 'Design\nOFF'}
+      </Text>
+    </TouchableOpacity>
 
       {/* [DEV] Polling toggle */}
       <TouchableOpacity

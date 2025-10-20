@@ -1,139 +1,134 @@
-// components/ui/PinMarker.jsx
 import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
 import Svg, { Defs, ClipPath, Circle, Path, G, Image as SvgImage } from 'react-native-svg';
 
-// Simple color system for categories
 export const categoryTint = (key = 'event') => ({
-  talk:     '#0EA5E9',
-  here:     '#22C55E',
-  event:    '#7C3AED',
+  talk: '#0EA5E9',
+  here: '#22C55E',
+  event: '#7C3AED',
   freebies: '#FF8A4C',
 }[key] || '#7C3AED');
 
 export default function PinMarker({
-  size = 44,
+  size = 80,
   tint = '#7C3AED',
   avatarUrl,
   label,
   selected = false,
   onPress,
+  minutesLeft = 240,   // NEW
+  totalMinutes = 240,  // NEW
 }) {
-  const ringWidth = selected ? 3 : 2.5;
+  const ringWidth = selected ? 3.5 : 3;
   const radius = size / 2;
-  const pointerHeight = 12; // Height of the pointy part
-  const totalHeight = size + pointerHeight;
 
-  // --- ANIMATION: fade/scale on mount + tiny pop when selected toggles ---
+  // Make the tail short & fat and ensure the tip sits at the actual bottom of the MarkerView
+  const tailLength = Math.round(size * 0.28); // ~28% of head size
+  const tipY = size + tailLength;             // absolute Y for the tip
+  const totalHeight = tipY + 2;               // canvas height; keeps tip near bottom (no tall empty space)
+
   const opacity = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.9)).current;
 
-  // mount animation (120ms)
   useEffect(() => {
     Animated.parallel([
       Animated.timing(opacity, { toValue: 1, duration: 120, useNativeDriver: true }),
-      Animated.timing(scale,   { toValue: 1, duration: 120, useNativeDriver: true }),
+      Animated.timing(scale, { toValue: 1, duration: 120, useNativeDriver: true }),
     ]).start();
   }, []);
 
-  // selected pop (spring to 1.06 then settle to 1)
   useEffect(() => {
     if (selected) {
       Animated.sequence([
         Animated.spring(scale, { toValue: 1.06, useNativeDriver: true, friction: 6, tension: 140 }),
-        Animated.spring(scale, { toValue: 1.0,  useNativeDriver: true, friction: 7, tension: 120 }),
+        Animated.spring(scale, { toValue: 1.0, useNativeDriver: true, friction: 7, tension: 120 }),
       ]).start();
     }
   }, [selected]);
 
-  // Center of circle
+  // Circle head center (shifted down slightly so it hugs the tail)
   const cx = radius;
-  const cy = radius;
+  const cy = radius + 14;       // drop the head a bit more so it hugs the tail
 
-  // Teardrop: circle + triangle pointer
-  const teardropPath = `
-    M ${cx},${cy - radius}
-    A ${radius},${radius} 0 1,1 ${cx},${cy + radius}
-    L ${cx},${size + pointerHeight}
-    L ${cx},${cy + radius}
-    A ${radius},${radius} 0 1,1 ${cx},${cy - radius}
+  // Tail geometry (shorter, wider, upside‑down triangle look)
+  const neckWidth = radius * 1.23;  // very wide neck
+  const joinY = cy + radius - 46;   // increase overlap into the head by ~12px (brings them tighter)
+
+  // Short, wide tail path (triangle-like)
+  const tailPath = `
+    M ${cx},${joinY}
+    Q ${cx + neckWidth},${joinY + 0} ${cx},${tipY}
+    Q ${cx - neckWidth},${joinY + 0} ${cx},${joinY}
     Z
   `;
+
+  // draw the progress ring centered:
+  const rOuter = radius - ringWidth - 9;
+  const rInner = radius - ringWidth - 14.5;
+ const ringThickness = (rOuter - rInner) * 0.40;     // thinner ring (55% of the gap)
+const rProg = rOuter - ringThickness * 1.6;          // move slightly inward toward center
+  const C = 2 * Math.PI * rProg;
+
+  // Clamp and normalize progress (clockwise)
+  const clamped = Math.max(0, Math.min(totalMinutes, minutesLeft ?? totalMinutes));
+  const progress = clamped / totalMinutes; // 1.0 fresh -> 0.0 expired
 
   return (
     <Animated.View style={{ opacity, transform: [{ scale }] }}>
       <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={styles.touchable}>
-        <View style={{ width: size, height: totalHeight, position: 'relative' }}>
-          {/* Glow halo behind */}
-          <View
-            style={[
-              styles.glow,
-              {
-                position: 'absolute',
-                top: -4,
-                left: -6,
-                width: size + 12,
-                height: size + 12,
-                borderRadius: (size + 12) / 2,
-                backgroundColor: `${tint}22`,
-                shadowColor: tint,
-                shadowOpacity: 0.4,
-                shadowRadius: 10,
-              },
-            ]}
-          />
-
-          {/* Pin SVG */}
+        <View
+          style={{
+            width: size,
+            height: totalHeight,
+            shadowColor: '#000',
+            shadowOpacity: 0.15,
+            shadowRadius: 6,
+            shadowOffset: { width: 0, height: 2 },
+            elevation: 3,
+          }}
+        >
           <Svg width={size} height={totalHeight} viewBox={`0 0 ${size} ${totalHeight}`}>
             <Defs>
-              {/* Circular clip for avatar */}
               <ClipPath id="avatarClip">
-                <Circle cx={cx} cy={cy} r={radius - ringWidth - 2} />
+                <Circle cx={cx} cy={cy} r={radius - ringWidth - 6} />
               </ClipPath>
             </Defs>
 
-            {/* White teardrop background */}
-            <Path d={teardropPath} fill="#fff" stroke="#fff" strokeWidth={1} />
+            {/* Tail only (drawn first). The circle head + rings are drawn after. */}
+            <Path d={tailPath} fill={tint} stroke={tint} strokeWidth={1.5} />
 
-            {/* Avatar image (clipped to circle) */}
-            {avatarUrl ? (
-              <G clipPath="url(#avatarClip)">
-                <SvgImage
-                  href={{ uri: avatarUrl }}
-                  x={ringWidth + 2}
-                  y={ringWidth + 2}
-                  width={size - (ringWidth + 2) * 2}
-                  height={size - (ringWidth + 2) * 2}
-                  preserveAspectRatio="xMidYMid slice"
-                />
-              </G>
-            ) : (
-              /* Gray fallback circle */
-              <Circle cx={cx} cy={cy} r={radius - ringWidth - 2} fill="#D1D5DB" />
-            )}
+            {/* Outer circle (same exact size as before) */}
+            <Circle cx={cx} cy={cy} r={radius - ringWidth - 9} fill={tint} />
 
-            {/* White inner stroke (separates avatar from ring) */}
+            {/* Progress ring between outer fill and gray slot */}
+            <G transform={`rotate(-90 ${cx} ${cy})`}>
+            {/* base ring (purple remainder) */}
             <Circle
-              cx={cx}
-              cy={cy}
-              r={radius - ringWidth - 1}
-              stroke="#fff"
-              strokeWidth={2}
-              fill="none"
+                cx={cx}
+                cy={cy}
+                r={rProg}
+                stroke={tint}
+                strokeWidth={ringThickness}
+                fill="none"
             />
-
-            {/* Colored ring */}
+            {/* active arc (white progress) */}
             <Circle
-              cx={cx}
-              cy={cy}
-              r={radius - ringWidth / 2}
-              stroke={tint}
-              strokeWidth={ringWidth}
-              fill="none"
+                cx={cx}
+                cy={cy}
+                r={rProg}
+                stroke="#FFFFFF"
+                strokeWidth={ringThickness}
+                strokeLinecap="round"
+                fill="none"
+                strokeDasharray={`${C * progress},${C}`}
             />
+            </G>
+
+            {/* //Gray inner circle slot */}
+            <Circle cx={cx} cy={cy} r={radius - ringWidth - 16.5} fill="#D1D5DB" />
+
           </Svg>
 
-          {/* Label bubble (positioned to the right) */}
           {label && (
             <View style={[styles.bubble, { backgroundColor: tint }]}>
               <Text style={styles.bubbleText} numberOfLines={2}>
@@ -148,29 +143,20 @@ export default function PinMarker({
 }
 
 const styles = StyleSheet.create({
-  touchable: {
-    alignItems: 'center',
-  },
-  glow: {
-    zIndex: -1,
-  },
+  touchable: { alignItems: 'center' },
   bubble: {
     position: 'absolute',
-    left: 36,
-    top: 8,
+    left: 44,
+    top: 12,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 10,
-    maxWidth: 180,
+    maxWidth: 220,
     shadowColor: '#000',
     shadowOpacity: 0.15,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
     elevation: 3,
   },
-  bubbleText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 13,
-  },
+  bubbleText: { color: '#fff', fontWeight: '700', fontSize: 13 },
 });
