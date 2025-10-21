@@ -99,20 +99,32 @@ export default function PinMarker({
   const clamped = Math.max(0, Math.min(totalMinutes, remaining));
   const progress = clamped / totalMinutes; // 1.0 fresh -> 0.0 expired
 
-  const CALLOUT_OFFSET_X = 7;  // horizontal offset from circle center
+  const CALLOUT_OFFSET_X = 7;   // horizontal offset from circle center
   const CALLOUT_OFFSET_Y = -24; // vertical offset from circle center (negative is up)
 
-  const CALLOUT_MAX_W = 140;     // tweak: total width of the callout bubble (visual capsule length)
-  const TEXT_MAX_W = 110;        // keep text line width capped at 120 (2 lines max)
-  const CALLOUT_SPACER_W = 8;   // tweak: empty left spacer to push text to the right
+  const CALLOUT_MAX_W = 160;    // maximum visual capsule length
+  const TEXT_MAX_W = 120;       // cap text width so it wraps to 2 lines
+  const LEADING_SPACER = 12;    // pushes text further right inside the bubble (keeps text from hiding under the pin)
+
+  // Make the MarkerView wider for click area BUT keep the pin centered on the map coordinate
+  const TOTAL_W = size + CALLOUT_MAX_W + 24; // full interactive width (pin + callout + padding)
+  const HALF_W = TOTAL_W / 2;                // parent center used to keep the pin centered
 
   return (
     <Animated.View style={{ opacity, transform: [{ scale }] }}>
-      <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={styles.touchable}>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={onPress}
+        style={[
+          styles.touchable,
+          { width: TOTAL_W, height: totalHeight }
+        ]}
+      >
         <View
           style={{
-            width: size,
+            width: TOTAL_W,
             height: totalHeight,
+            position: 'relative',
             overflow: 'visible',
             shadowColor: '#000',
             shadowOpacity: 0.15,
@@ -123,24 +135,20 @@ export default function PinMarker({
         >
           {!!text && (
             <Animated.View
-              pointerEvents="none"
               style={[
                 styles.calloutWrap,
                 {
-                  left: cx + CALLOUT_OFFSET_X,
+                  left: HALF_W + CALLOUT_OFFSET_X,   // anchor callout from parent center so pin stays centered
                   top: cy + CALLOUT_OFFSET_Y,
                 },
               ]}
             >
-              <View style={[
-                styles.calloutBubble,
-                {
-                  backgroundColor: tint,
-                  width: CALLOUT_MAX_W,   // visual capsule length
-                }
-              ]}>
-                {/* Left spacer to push text further right */}
-                <View style={{ width: CALLOUT_SPACER_W }} />
+              <View
+                style={[
+                  styles.calloutBubble,
+                  { backgroundColor: tint, maxWidth: CALLOUT_MAX_W, paddingLeft: 12 + LEADING_SPACER }
+                ]}
+              >
                 {!!photoUrl && (
                   <View style={styles.thumbWrap}>
                     <View style={[styles.thumb, { backgroundColor: '#ddd' }]}>
@@ -155,22 +163,22 @@ export default function PinMarker({
                 <Text
                   style={[
                     styles.calloutText,
-                    {
-                      width: TEXT_MAX_W,      // keep text width capped at 120
-                      flexShrink: 0,
-                    }
+                    { maxWidth: TEXT_MAX_W, flexShrink: 1, flexGrow: 0 }
                   ]}
                   numberOfLines={2}
                   ellipsizeMode="tail"
                 >
                   {text}
                 </Text>
-                {/* Optional right spacer to balance the capsule visually */}
-                <View style={{ flex: 1 }} />
               </View>
             </Animated.View>
           )}
-          <Svg width={size} height={totalHeight} viewBox={`0 0 ${size} ${totalHeight}`}>
+          <Svg
+            width={size}
+            height={totalHeight}
+            viewBox={`0 0 ${size} ${totalHeight}`}
+            style={{ position: 'absolute', left: HALF_W - (size / 2), top: 0, zIndex: 2 }}
+          >
             <Defs>
               <ClipPath id="avatarClip">
                 <Circle cx={cx} cy={cy} r={rAvatar} />
@@ -256,52 +264,53 @@ const styles = StyleSheet.create({
   bubbleText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   // --- Callout bubble (text to the right of pin) ---
   // --- Callout bubble (single capsule to the right) ---
-calloutWrap: {
-  position: 'absolute',
-  alignItems: 'flex-start',
-  zIndex: 0,
-},
-calloutBubble: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 6,
-  paddingHorizontal: 12,
-  paddingVertical: 8,
-  borderRadius: 16,
-  shadowColor: '#000',
-  shadowOpacity: 0.15,
-  shadowRadius: 6,
-  shadowOffset: { width: 0, height: 2 },
-  elevation: 3,
-  alignSelf: 'flex-start',  // prevent stretching full-width by parent
-},
-calloutText: {
-  color: 'white',
-  fontWeight: '700',
-  fontSize: 13,
-  lineHeight: 16,
-  flexShrink: 0,     // allow wrapping to the specified width without shrinking
-},
-calloutTail: {
-  width: 0,
-  height: 0,
-  alignSelf: 'flex-start',
-  marginLeft: 10,     // aligns the tail near the bubble’s left edge
-  marginTop: -1,
-  borderLeftWidth: 6,
-  borderRightWidth: 6,
-  borderTopWidth: 8,
-  borderLeftColor: 'transparent',
-  borderRightColor: 'transparent',
-},
-thumbWrap: { marginRight: 8 },
-thumb: {
-  width: 26,
-  height: 26,
-  borderRadius: 13,
-  overflow: 'hidden',
-  borderWidth: 1.5,
-  borderColor: 'rgba(255,255,255,0.85)',
-},
-thumbImg: { width: '100%', height: '100%' },
+  calloutWrap: {
+    position: 'absolute',
+    alignItems: 'flex-start',
+    zIndex: 0,
+    pointerEvents: 'auto',
+  },
+  calloutBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+    alignSelf: 'flex-start',  // prevent stretching full-width by parent
+  },
+  calloutText: {
+    color: 'white',
+    fontWeight: '700',
+    fontSize: 13,
+    lineHeight: 16,
+    flexShrink: 0,     // allow wrapping to the specified width without shrinking
+  },
+  calloutTail: {
+    width: 0,
+    height: 0,
+    alignSelf: 'flex-start',
+    marginLeft: 10,     // aligns the tail near the bubble’s left edge
+    marginTop: -1,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+  },
+  thumbWrap: { marginRight: 8 },
+  thumb: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.85)',
+  },
+  thumbImg: { width: '100%', height: '100%' },
 });
