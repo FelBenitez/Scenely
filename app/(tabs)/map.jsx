@@ -15,6 +15,7 @@ import TopBar from '../../components/ui/TopBar';
 import { supabase } from '../../lib/supabase';
 import PinMarker, { categoryTint } from '../../components/ui/PinMarker';
 import SpotMarker from '../../components/ui/SpotMarker';
+import PetalMarker from '../../components/ui/PetalMarker';
 
 
 // Sprite(s) for post pins
@@ -69,8 +70,47 @@ function distanceInMeters(lat1, lng1, lat2, lng2) {
   return R * c;
 }
 
-// MAKING HYBRID GPU PINS
+// Petal offset positions (in pixels) for different counts
+// These are relative to the hero's center
+function getPetalOffsets(count) {
+  const RADIUS = 24; // Distance from hero center
+  
+  switch (count) {
+    case 2:
+      // Left and right
+      return [
+        { x: -RADIUS, y: 0 },
+        { x: RADIUS, y: 0 },
+      ];
+    case 3:
+      // Triangle: top-left, top-right, bottom
+      return [
+        { x: -RADIUS * 0.866, y: -RADIUS * 0.5 },
+        { x: RADIUS * 0.866, y: -RADIUS * 0.5 },
+        { x: 0, y: RADIUS },
+      ];
+    case 4:
+      // Square: corners
+      return [
+        { x: -RADIUS * 0.707, y: -RADIUS * 0.707 },
+        { x: RADIUS * 0.707, y: -RADIUS * 0.707 },
+        { x: -RADIUS * 0.707, y: RADIUS * 0.707 },
+        { x: RADIUS * 0.707, y: RADIUS * 0.707 },
+      ];
+    default:
+      // 5: Pentagon
+      return [
+        { x: 0, y: -RADIUS },
+        { x: RADIUS * 0.951, y: -RADIUS * 0.309 },
+        { x: RADIUS * 0.588, y: RADIUS * 0.809 },
+        { x: -RADIUS * 0.588, y: RADIUS * 0.809 },
+        { x: -RADIUS * 0.951, y: -RADIUS * 0.309 },
+      ];
+  }
+}
 
+
+// MAKING HYBRID GPU PINS
 // --- GPU base: derive freshness bucket + priority and build GeoJSON ---
 function getMinutesLeft(created_at) {
   if (!created_at) return 0;
@@ -176,6 +216,102 @@ function pickHero(arr) {
     return friendBoost + freshness + engagement * 150 + recency * 0.0001;
   };
   return arr.slice().sort((a, b) => score(b) - score(a))[0];
+}
+
+// ---- Flower (petals) helpers ----
+
+// When to show petals
+const FLOWER_MIN_ZOOM = 16.5;
+// Max # of petals shown around the hero
+const FLOWER_MAX_PETALS = 5;
+// Petal radius in screen pixels from hero center
+const FLOWER_RADIUS_PX = 12;
+
+// Angles to use (degrees from 12 o'clock, clockwise) by petal count
+// We rotate these slightly per-spot using a tiny seed so stacks don't all look identical.
+function baseAnglesForCount(n) {
+  // n = number of petals (not including hero)
+  switch (n) {
+    case 1: return [0];                        // top
+    case 2: return [315, 45];                  // top-right, top-left
+    case 3: return [0, 120, 240];
+    case 4: return [0, 72, 144, 216];
+    default: return [0, 72, 144, 216, 288];    // 5+
+  }
+}
+
+// Tiny stable rotation seed per spot (±8°)
+function rotationSeedDeg(lng, lat) {
+  const s = `${lng.toFixed(5)},${lat.toFixed(5)}`;
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0;
+  }
+  // map to [-8, +8]
+  return ((h % 17) - 8);
+}
+
+// RNMapbox uses 512px tiles. Meters per pixel at a latitude for a given zoom.
+function metersPerPixel(zoom, lat) {
+  const EARTH_RADIUS = 6378137;         // meters
+  const TILE_SIZE = 512;                 // Mapbox GL
+  return (Math.cos(lat * Math.PI / 180) * 2 * Math.PI * EARTH_RADIUS) / (TILE_SIZE * Math.pow(2, zoom));
+}
+
+// Convert a pixel offset (dx,dy) at the current zoom into a new [lng, lat] near a base coordinate.
+// dx is to the right, dy is downward (screen coords). We'll invert dy for geographic "north is up".
+function offsetCoordByPixels({ lng, lat }, dxPx, dyPx, zoom) {
+  const mpp = metersPerPixel(zoom, lat);
+  const dxMeters = dxPx * mpp;
+  const dyMeters = dyPx * mpp;
+
+  const dLat = ( -dyMeters ) / 111000; // -dy: screen down is south; geographic north is up
+  const dLng = dxMeters / (111000 * Math.cos(lat * Math.PI / 180));
+
+  return [lng + dLng, lat + dLat];
+}
+
+// Score for petals (reuse hero logic but without the huge friend bonus dominance)
+function petalScore(p) {
+  const minsLeft = getMinutesLeft(p.created_at);
+  const friendBoost = p.isFriend ? 10000 : 0; // smaller than hero's, still noticeable
+  const engagement = (p.reactions || 0) + 2 * (p.comments || 0);
+  const freshness = Math.max(0, minsLeft) * 200;
+  const recency = new Date(p.created_at || 0).getTime();
+  return friendBoost + freshness + engagement * 150 + recency * 0.0001;
+}
+
+// Given a spot (hero + bucket) and camera zoom, return petal definitions with coordinates.
+function buildPetalsForSpot(spot, zoom) {
+  const { hero, posts, count, lat, lng } = spot;
+  if (count < 2 || typeof zoom !== 'number' || zoom < FLOWER_MIN_ZOOM) return [];
+
+  // Choose up to N best petals excluding hero
+  const candidates = posts.filter(p => String(p.id) !== String(hero.id));
+  candidates.sort((a, b) => petalScore(b) - petalScore(a));
+  const petals = candidates.slice(0, FLOWER_MAX_PETALS);
+
+  const n = petals.length;
+  if (n === 0) return [];
+
+  const baseAngles = baseAnglesForCount(n);
+  const seed = rotationSeedDeg(lng, lat);
+
+  // Convert angles & radius to pixel offsets, then to coordinates
+  return petals.map((p, i) => {
+    const deg = baseAngles[i] + seed;
+    const rad = (deg * Math.PI) / 180;
+    const dx = Math.sin(rad) * FLOWER_RADIUS_PX; // +x is right
+    const dy = -Math.cos(rad) * FLOWER_RADIUS_PX; // +y is down; cos gives up, so negate
+
+    const [plng, plat] = offsetCoordByPixels({ lng, lat }, dx, dy, zoom);
+
+    return {
+      post: p,
+      coordinate: [plng, plat],
+      angleDeg: deg,
+    };
+  });
 }
 
 
@@ -450,6 +586,15 @@ const upgradedSpots = useMemo(
   () => buildSpotStacks(upgradedPosts),
   [upgradedPosts]
 );
+
+// Build petals per upgraded spot (screen-space offsets → nearby coords)
+const flowerSpots = useMemo(() => {
+  const z = cameraInfo?.zoom ?? 0;
+  return upgradedSpots.map(spot => ({
+    ...spot,
+    petals: buildPetalsForSpot(spot, z), // [] if not eligible by zoom/count
+  }));
+}, [upgradedSpots, cameraInfo?.zoom]);
 
 
   // Memoized GeoJSON for posts -> Mapbox ShapeSource
@@ -986,67 +1131,97 @@ const postsGeoJSON = useMemo(() => {
         />
       </MapboxGL.ShapeSource>
 
-      {/* Upgrade layer: singles → PinMarker, stacks → SpotMarker */}
-      {upgradedSpots.map((spot, idx) => {
-      const { lng, lat, posts: bucket, hero, count } = spot;
-      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+      {/* Upgrade layer: singles → PinMarker, stacks → SpotMarker with petals */}
+{flowerSpots.map((spot, idx) => {
+  const { lng, lat, posts: bucket, hero, count } = spot;
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
 
-      const tint = categoryTint(hero.category || 'event');
-      const minsLeft  = minutesLeftForPost(hero, 240);
-      const totalMins = totalMinutesForPost(hero, 240);
+  const tint = categoryTint(hero.category || 'event');
+  const minsLeft = minutesLeftForPost(hero, 240);
+  const totalMins = totalMinutesForPost(hero, 240);
 
-      // Selected if any post in the bucket is selected
-      const isSelected = !!(selectedPost && bucket.some(p => String(p.id) === String(selectedPost.id)));
+  // Selected if any post in the bucket is selected
+  const isSelected = !!(selectedPost && bucket.some(p => String(p.id) === String(selectedPost.id)));
 
-      const onPress = () => {
-        if (count === 1) {
-          // same behavior as your old single upgrade tap
-          if (selectedPost && String(selectedPost.id) === String(hero.id)) {
-            setSheetOpen(true);
-          } else {
-            setSelectedPost(hero);
-            setSheetOpen(false);
-          }
-        } else {
-          // open the cluster/spot feed with this bucket
-          setSelectedCluster(bucket);
-          setSheetOpen(false);
-        }
-      };
+  const onPress = () => {
+    if (count === 1) {
+      // Single post behavior
+      if (selectedPost && String(selectedPost.id) === String(hero.id)) {
+        setSheetOpen(true);
+      } else {
+        setSelectedPost(hero);
+        setSheetOpen(false);
+      }
+    } else {
+      // Multi-post: open cluster sheet
+      setSelectedCluster(bucket);
+      setSheetOpen(false);
+    }
+  };
 
-      return (
-        <MapboxGL.MarkerView
-          key={`spot-${idx}-${hero.id}`}
-          id={`spot-${idx}-${hero.id}`}
-          coordinate={[lng, lat]}
-          anchor={{ x: 0.5, y: 1 }}
-        >
-          {count === 1 ? (
-            <PinMarker
-              post={hero}
+  // Get petals (exclude hero)
+  const petals = count > 1 
+    ? bucket
+        .filter(p => String(p.id) !== String(hero.id))
+        .slice(0, 5) // Max 5 petals
+    : [];
+
+  const petalOffsets = petals.length > 0 ? getPetalOffsets(petals.length) : [];
+
+  return (
+    <MapboxGL.MarkerView
+      key={`spot-${idx}-${hero.id}`}
+      id={`spot-${idx}-${hero.id}`}
+      coordinate={[lng, lat]}
+      anchor={{ x: 0.5, y: 1 }}
+    >
+      {/* Container for flower layout */}
+      <View style={{ position: 'relative', alignItems: 'center' }}>
+        {/* Render petals behind hero */}
+        {petals.map((petal, pIdx) => {
+          const offset = petalOffsets[pIdx] || { x: 0, y: 0 };
+          return (
+            <PetalMarker
+              key={`petal-${petal.id}`}
+              size={30} // Smaller than hero (which is 80)
+              avatarUrl={petal.avatar_url}
+              photoUrl={petal.photo_url}
               tint={tint}
-              avatarUrl={hero.avatar_url}
-              text={hero.text}
-              photoUrl={hero.photo_url}
-              minutesLeft={minsLeft}
-              totalMinutes={totalMins}
-              selected={isSelected}
-              onPress={onPress}
+              offsetX={offset.x}
+              offsetY={offset.y}
             />
-          ) : (
-            <SpotMarker
-              tint={tint}
-              avatarUrl={hero.avatar_url}
-              minutesLeft={minsLeft}
-              totalMinutes={totalMins}
-              selected={isSelected}
-              count={count}
-              onPress={onPress}
-            />
-          )}
-        </MapboxGL.MarkerView>
-      );
-    })}
+          );
+        })}
+
+        {/* Hero pin (on top, tappable) */}
+        {count === 1 ? (
+          <PinMarker
+            post={hero}
+            tint={tint}
+            avatarUrl={hero.avatar_url}
+            text={hero.text}
+            photoUrl={hero.photo_url}
+            minutesLeft={minsLeft}
+            totalMinutes={totalMins}
+            selected={isSelected}
+            onPress={onPress}
+            createdAt={hero.created_at}
+          />
+        ) : (
+          <SpotMarker
+            tint={tint}
+            avatarUrl={hero.avatar_url}
+            minutesLeft={minsLeft}
+            totalMinutes={totalMins}
+            selected={isSelected}
+            count={count}
+            onPress={onPress}
+          />
+        )}
+      </View>
+    </MapboxGL.MarkerView>
+  );
+})}
 
 
 
