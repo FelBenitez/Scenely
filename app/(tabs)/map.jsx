@@ -14,6 +14,7 @@ import Toast from '../../components/ui/Toast';
 import TopBar from '../../components/ui/TopBar';
 import { supabase } from '../../lib/supabase';
 import PinMarker, { categoryTint } from '../../components/ui/PinMarker';
+import SpotMarker from '../../components/ui/SpotMarker';
 
 
 // Sprite(s) for post pins
@@ -127,6 +128,57 @@ function totalMinutesForPost(p, fallback = 240) {
   return fallback;
 }
 
+// Within ~6–8px at current zoom looks identical. Use small epsilon in degrees.
+const EPSILON_DEG = 0.00002; // ~2m at Austin latitude. Tweak if needed.
+
+// Returns array of { lng, lat, posts: Post[], hero: Post, count: number }
+function buildSpotStacks(sourcePosts) {
+  const groups = [];
+  const visited = new Set();
+
+  // naive O(n^2) with tiny n (only upgraded posts) → fine
+  for (let i = 0; i < sourcePosts.length; i++) {
+    const a = sourcePosts[i];
+    if (!a || visited.has(a.id)) continue;
+
+    const bucket = [a];
+    visited.add(a.id);
+
+    for (let j = i + 1; j < sourcePosts.length; j++) {
+      const b = sourcePosts[j];
+      if (!b || visited.has(b.id)) continue;
+      if (Math.abs(a.lat - b.lat) <= EPSILON_DEG && Math.abs(a.lng - b.lng) <= EPSILON_DEG) {
+        bucket.push(b);
+        visited.add(b.id);
+      }
+    }
+
+    // pick hero (freshness > friend > engagement > recency)
+    const hero = pickHero(bucket);
+    groups.push({
+      lng: a.lng,
+      lat: a.lat,
+      posts: bucket,
+      hero,
+      count: bucket.length,
+    });
+  }
+  return groups;
+}
+
+function pickHero(arr) {
+  const score = (p) => {
+    const minsLeft = getMinutesLeft(p.created_at);
+    const friendBoost = p.isFriend ? 100000 : 0;
+    const engagement = (p.reactions || 0) + 2 * (p.comments || 0);
+    const freshness = Math.max(0, minsLeft) * 200;
+    const recency = new Date(p.created_at || 0).getTime();
+    return friendBoost + freshness + engagement * 150 + recency * 0.0001;
+  };
+  return arr.slice().sort((a, b) => score(b) - score(a))[0];
+}
+
+
 // Fetch a user's avatar_url from profiles (used for realtime inserts)
 async function fetchAvatarForUser(user_id) {
   try {
@@ -195,6 +247,7 @@ export default function MapTab() {
     zoom: 14,
   });
 
+
   // threshold at which GPU -> React upgrade kicks in
   const UPGRADE_ZOOM = designMode ? 0 : 15;
 
@@ -225,6 +278,31 @@ export default function MapTab() {
       setUserId(user?.id ?? null);
     })();
   }, []);
+
+
+
+  useEffect(() => {
+  let channel;
+
+  const handler = async (payload) => {
+    console.log('[RT posts] change:', payload?.eventType, payload?.new?.id);
+    // ...your existing insert/delete handlers...
+  };
+
+  channel = supabase
+    .channel('realtime:public:posts') // name can be anything
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'posts' },
+      handler
+    )
+    .subscribe((status) => {
+      console.log('[RT posts] status:', status); // 'SUBSCRIBED' is what you want
+    });
+
+  return () => {
+    supabase.removeChannel(channel).catch(()=>{});
+  };
+}, []);
 
 
   // Stable jitter based on user_id hash (FIXED: handles negative hashes)
@@ -359,6 +437,19 @@ const spriteFilter = useMemo(() => {
   // hide any features whose id is in upgradeIds
   return ['all', base, ['!', ['in', ['get', 'id'], ['literal', upgradeIds]]]];
 }, [upgradeIds]);
+
+
+// Build upgraded posts → stack same-spot pins into "spots"
+const upgradedPosts = useMemo(
+  () => (upgradeIds || [])
+    .map(uid => posts.find(p => String(p.id) === String(uid)))
+    .filter(Boolean),
+  [upgradeIds, posts]
+);
+const upgradedSpots = useMemo(
+  () => buildSpotStacks(upgradedPosts),
+  [upgradedPosts]
+);
 
 
   // Memoized GeoJSON for posts -> Mapbox ShapeSource
@@ -895,54 +986,67 @@ const postsGeoJSON = useMemo(() => {
         />
       </MapboxGL.ShapeSource>
 
-      {/* Upgrade layer: show PinMarker for top-N */}
-      {upgradeIds.map(uid => {
-        const p = posts.find(pp => String(pp.id) === uid);
-        if (!p || !Number.isFinite(p.lng) || !Number.isFinite(p.lat)) return null;
+      {/* Upgrade layer: singles → PinMarker, stacks → SpotMarker */}
+      {upgradedSpots.map((spot, idx) => {
+      const { lng, lat, posts: bucket, hero, count } = spot;
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
 
-        // Recompute on minute tick so the progress ring steps once/min while visible
-        const _tick = minuteTick; // keep this reference so this block re-renders each minute
-        const minsLeft  = minutesLeftForPost(p, 240);
-        const totalMins = totalMinutesForPost(p, 240);
-        const tint = categoryTint(p.category || 'event');
+      const tint = categoryTint(hero.category || 'event');
+      const minsLeft  = minutesLeftForPost(hero, 240);
+      const totalMins = totalMinutesForPost(hero, 240);
 
-        return (
-          <MapboxGL.MarkerView
-            key={`up-${uid}`}
-            id={`up-${uid}`}
-            coordinate={[p.lng, p.lat]}
-            anchor={{ x: 0.5, y: 1 }}
-          >
+      // Selected if any post in the bucket is selected
+      const isSelected = !!(selectedPost && bucket.some(p => String(p.id) === String(selectedPost.id)));
+
+      const onPress = () => {
+        if (count === 1) {
+          // same behavior as your old single upgrade tap
+          if (selectedPost && String(selectedPost.id) === String(hero.id)) {
+            setSheetOpen(true);
+          } else {
+            setSelectedPost(hero);
+            setSheetOpen(false);
+          }
+        } else {
+          // open the cluster/spot feed with this bucket
+          setSelectedCluster(bucket);
+          setSheetOpen(false);
+        }
+      };
+
+      return (
+        <MapboxGL.MarkerView
+          key={`spot-${idx}-${hero.id}`}
+          id={`spot-${idx}-${hero.id}`}
+          coordinate={[lng, lat]}
+          anchor={{ x: 0.5, y: 1 }}
+        >
+          {count === 1 ? (
             <PinMarker
-              post={p}
+              post={hero}
               tint={tint}
-              avatarUrl={p.avatar_url}
-              text={p.text}
-              photoUrl={p.photo_url}
+              avatarUrl={hero.avatar_url}
+              text={hero.text}
+              photoUrl={hero.photo_url}
               minutesLeft={minsLeft}
               totalMinutes={totalMins}
-              selected={selectedPost && String(selectedPost.id) === uid}
-              onPress={() => {
-                if (selectedPost && String(selectedPost.id) === uid) {
-                  setSheetOpen(true);
-                } else {
-                  setSelectedPost(p);
-                  setSheetOpen(false);
-                }
-              }}
+              selected={isSelected}
+              onPress={onPress}
             />
-          </MapboxGL.MarkerView>
-        );
-      })}
-
-
-
-
-
-
-
-
-
+          ) : (
+            <SpotMarker
+              tint={tint}
+              avatarUrl={hero.avatar_url}
+              minutesLeft={minsLeft}
+              totalMinutes={totalMins}
+              selected={isSelected}
+              count={count}
+              onPress={onPress}
+            />
+          )}
+        </MapboxGL.MarkerView>
+      );
+    })}
 
 
 
