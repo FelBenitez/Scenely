@@ -53,42 +53,49 @@ export default function PostCard({
   }
 
   // Tile variant
-  return (
-    <TouchableOpacity 
-      activeOpacity={0.9} 
-      onPress={() => onPress?.(post)} 
-      style={styles.tile}
-    >
-      {post.photo_url ? (
+// Tile variant
+return (
+  <TouchableOpacity 
+    activeOpacity={0.9} 
+    onPress={() => onPress?.(post)} 
+    style={styles.tile}
+  >
+    {post.photo_url ? (
+      <>
         <Image 
           source={{ uri: post.photo_url }} 
           style={styles.photo}
           resizeMode="cover"
         />
-      ) : (
-        <View style={[styles.photo, styles.photoFallback]}>
-          <Text style={styles.photoFallbackText}>📷</Text>
+        <View style={styles.tileBody}>
+          <View style={styles.tileHeader}>
+            <Image source={{ uri: avatarUrl }} style={styles.avatarSm} />
+            <Text style={styles.miniMeta}>{minsLeft}m</Text>
+          </View>
+          <Text numberOfLines={2} style={styles.tileTitle}>
+            {post.text || 'No caption'}
+          </Text>
+          {dupe && (
+            <View style={styles.dupePill}>
+              <Text style={styles.dupeText}>+{post._dupeCount - 1} similar</Text>
+            </View>
+          )}
         </View>
-      )}
-      <View style={styles.tileBody}>
-        <View style={styles.tileHeader}>
-          <Image 
-            source={{ uri: avatarUrl }} 
-            style={styles.avatarSm}
-          />
-          <Text style={styles.miniMeta}>{minsLeft}m</Text>
-        </View>
-        <Text numberOfLines={2} style={styles.tileTitle}>
+      </>
+    ) : (
+      // TEXT-ONLY TILE: let the text fill the block, footer at bottom
+      <View style={styles.textTile}>
+        <Text numberOfLines={6} style={styles.textOnlyTitle}>
           {post.text || 'No caption'}
         </Text>
-        {dupe && (
-          <View style={styles.dupePill}>
-            <Text style={styles.dupeText}>+{post._dupeCount - 1} similar</Text>
-          </View>
-        )}
+        <View style={styles.textOnlyFooter}>
+          <Image source={{ uri: avatarUrl }} style={styles.avatarSm} />
+          <Text style={styles.miniMeta}>{minsLeft}m</Text>
+        </View>
       </View>
-    </TouchableOpacity>
-  );
+    )}
+  </TouchableOpacity>
+);
 }
 
 const styles = StyleSheet.create({
@@ -137,7 +144,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 12,
   },
-  
+  textTile: {
+  flex: 1,
+  minHeight: 180,        // keeps grid rows even; try 180–200
+  padding: 12,
+  justifyContent: 'space-between',
+  },
   // Tile (Bottom sheet grid)
   tile: {
     flex: 1,
@@ -202,4 +214,22 @@ const styles = StyleSheet.create({
     color: '#374151',
     fontWeight: '600',
   },
+  textOnlyBody: {
+  padding: 12,
+  gap: 8,
+  minHeight: 150,            // gives it the tall “block” feel like the mock
+  justifyContent: 'space-between',
+  },
+  textOnlyTitle: {
+  fontSize: 18,
+  lineHeight: 22,
+  fontWeight: '700',
+  color: '#111',
+  },
+  textOnlyFooter: {
+  marginTop: 12,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+},
 });
