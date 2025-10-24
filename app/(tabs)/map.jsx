@@ -71,6 +71,25 @@ function distanceInMeters(lat1, lng1, lat2, lng2) {
   return R * c;
 }
 
+// Format meters -> short miles label
+function formatMilesLabel(meters) {
+  const miles = meters / 1609.344;
+  if (miles < 0.1) return '0.1 mi';
+  if (miles < 1)   return `${miles.toFixed(1)} mi`;
+  const rounded = Math.round(miles * 10) / 10;
+  return `${rounded.toFixed(1)} mi`;
+}
+
+// Build distance label for a cluster of posts
+function distanceLabelForCluster(cluster, userLoc) {
+  if (!Array.isArray(cluster) || cluster.length === 0 || !userLoc) return '';
+  // use centroid of the cluster (safe if all same spot)
+  const lat = cluster.reduce((s, p) => s + (p.lat || 0), 0) / cluster.length;
+  const lng = cluster.reduce((s, p) => s + (p.lng || 0), 0) / cluster.length;
+  const meters = distanceInMeters(userLoc.latitude, userLoc.longitude, lat, lng);
+  return formatMilesLabel(meters);
+}
+
 // Petal offset positions (in pixels) for different counts
 // These are relative to the hero's center
 function getPetalOffsets(count) {
@@ -1468,7 +1487,7 @@ const postsGeoJSON = useMemo(() => {
        <SpotFeedSheet
   visible={!!selectedCluster}
   title="This spot"
-  distanceLabel="Nearby"
+  distanceLabel={distanceLabelForCluster(selectedCluster, userLoc)}
   posts={selectedCluster || []}
   onClose={() => setSelectedCluster(null)}
   onSelectPost={(p) => {

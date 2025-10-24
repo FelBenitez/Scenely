@@ -4,6 +4,7 @@ import { View, Text, StyleSheet, TouchableOpacity, FlatList, Animated, Dimension
 import { BlurView } from 'expo-blur';
 import PostCard from './PostCard';
 import { deDupeSimilar, rankNew, rankTop } from '../utils/ranking';
+import { Feather } from '@expo/vector-icons';
 
 const SCREEN_H = Dimensions.get('window').height;
 
@@ -92,7 +93,10 @@ export default function SpotFeedSheet({
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.title}>{title} · {posts.length} posts</Text>
-            <Text style={styles.sub}>{distanceLabel || 'Nearby'}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Feather name="map-pin" size={13} color="#6B7280" />
+              <Text style={styles.sub}>{distanceLabel || 'Nearby'}</Text>
+            </View>
           </View>
 
           {/* Tabs */}
@@ -139,11 +143,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
   sheetContainer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: SCREEN_H * 0.85,
+  position: 'absolute',
+  bottom: 0,
+  alignSelf: 'center',
+  width: '93%', // To change width of the bottom sheet to not go left-right
+  height: SCREEN_H * 0.85,
+  borderTopLeftRadius: 24,
+  borderTopRightRadius: 24,
+  overflow: 'hidden',
   },
   sheet: {
     flex: 1,
