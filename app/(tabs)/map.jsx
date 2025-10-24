@@ -16,6 +16,7 @@ import { supabase } from '../../lib/supabase';
 import PinMarker, { categoryTint } from '../../components/ui/PinMarker';
 import SpotMarker from '../../components/ui/SpotMarker';
 import PetalMarker from '../../components/ui/PetalMarker';
+import SpotFeedSheet from '../../components/SpotFeedSheet';
 
 
 // Sprite(s) for post pins
@@ -1216,6 +1217,7 @@ const postsGeoJSON = useMemo(() => {
   const isSelected = !!(selectedPost && bucket.some(p => String(p.id) === String(selectedPost.id)));
 
   const onPress = () => {
+    console.log('[Spot Tap] count:', count, 'bucket:', bucket.length);
     if (count === 1) {
       // Single post behavior
       if (selectedPost && String(selectedPost.id) === String(hero.id)) {
@@ -1226,10 +1228,12 @@ const postsGeoJSON = useMemo(() => {
       }
     } else {
       // Multi-post: open cluster sheet
+      console.log('[Spot Tap] Opening SpotFeedSheet with', bucket.length, 'posts');
       setSelectedCluster(bucket);
       setSheetOpen(false);
     }
   };
+  
 
   // Get petals (exclude hero)
   const petals = count > 1 
@@ -1461,58 +1465,21 @@ const postsGeoJSON = useMemo(() => {
 
 
 
-       <Modal
-   transparent
-   visible={!!selectedCluster}
-   animationType="slide"
-   onRequestClose={() => setSelectedCluster(null)}
- >
-   <View style={styles.modalBackdrop}>
-     <View style={styles.sheet}>
-       <Text style={styles.sheetTitle}>
-         {selectedCluster?.length || 0} posts in this spot
-       </Text>
-
-       <View style={{ maxHeight: 360 }}>
-         {selectedCluster?.map(p => {
-           if (!p?.id || !p?.text) return null;
-           return (
-             <TouchableOpacity
-               key={p.id}
-               activeOpacity={0.8}
-               onPress={() => {
-                 setSelectedPost(p); // open this one
-                 setSelectedCluster(null); // close the list
-               }}
-             >
-               <View
-                 style={{
-                   paddingVertical: 10,
-                   borderBottomWidth: StyleSheet.hairlineWidth,
-                   borderBottomColor: '#e5e5e5'
-                 }}
-               >
-                 <Text style={{ fontSize: 15, color: '#111' }}>{p.text}</Text>
-                 <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>
-                   {p.created_at ? new Date(p.created_at).toLocaleTimeString() : ''}
-                 </Text>
-               </View>
-             </TouchableOpacity>
-           );
-         })}
-       </View>
-
-       <View style={styles.row}>
-         <TouchableOpacity
-           style={styles.primaryBtn}
-           onPress={() => setSelectedCluster(null)}
-         >
-           <Text style={{ color: 'white', fontWeight: '600' }}>Close</Text>
-         </TouchableOpacity>
-       </View>
-     </View>
-   </View>
- </Modal>
+       <SpotFeedSheet
+  visible={!!selectedCluster}
+  title="This spot"
+  distanceLabel="Nearby"
+  posts={selectedCluster || []}
+  onClose={() => setSelectedCluster(null)}
+  onSelectPost={(p) => {
+    setSelectedPost(p);        // open the post
+    setSheetOpen(true);        // trigger PostSheet
+    setSelectedCluster(null);  // close the spot sheet
+  }}
+  onViewOnMap={(p) => {
+    if (p?.lng && p?.lat) recenterTo({ lng: p.lng, lat: p.lat, zoom: 17 });
+  }}
+/>
 
      <PostSheet
    post={sheetOpen ? selectedPost : null}
@@ -1580,6 +1547,25 @@ const postsGeoJSON = useMemo(() => {
       {/* Primary FAB */}
       <FAB visible={!composerOpen} onPress={() => setComposerOpen(true)} />
 
+
+        {/* Temporary test button */}
+      <TouchableOpacity
+        style={{
+          position: 'absolute',
+          top: 100,
+          right: 16,
+          backgroundColor: 'red',
+          padding: 12,
+          borderRadius: 8,
+          zIndex: 9999,
+        }}
+        onPress={() => {
+          console.log('Test button pressed - forcing sheet open');
+          setSelectedCluster(posts.slice(0, 3)); // Use first 3 posts as test
+        }}
+      >
+        <Text style={{ color: 'white', fontWeight: 'bold' }}>Test Sheet</Text>
+      </TouchableOpacity>
 
     </View>
   );

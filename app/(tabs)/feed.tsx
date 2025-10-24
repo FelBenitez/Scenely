@@ -1,98 +1,133 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+// app/(tabs)/feed.tsx
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, RefreshControl, ListRenderItem } from 'react-native';
+import PostCard from '../../components/PostCard';
+import { rankTop, rankNew, deDupeSimilar } from '../../utils/ranking';
+import { supabase } from '../../lib/supabase';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+type Profile = {
+  avatar_url?: string | null;
+  username?: string | null;
+};
 
-export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+export type Post = {
+  id: string | number;
+  text?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  created_at: string;
+  expires_at?: string | null;
+  user_id?: string | null;
+  photo_url?: string | null;
+  reactions?: number | null;
+  comments?: number | null;
+  profiles?: Profile;
+  // client-side convenience fields:
+  avatar_url?: string | null;
+  distanceLabel?: string;
+  _dupeCount?: number;
+};
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+const FeedTab: React.FC = () => {
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [tab, setTab] = useState<'Top' | 'New'>('Top');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchPosts = useCallback(async () => {
+    const since = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+
+    const { data, error } = await supabase
+      .from('posts')
+      .select(
+        'id, text, lat, lng, created_at, expires_at, user_id, photo_url, reactions, comments, profiles:user_id(avatar_url, username)'
+      )
+      .gt('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    if (error) {
+      console.warn('feed fetch error:', error.message);
+      return;
+    }
+
+    const normalized: Post[] =
+      (data as Post[] | null)?.map((p) => ({
+        ...p,
+        avatar_url: p?.profiles?.avatar_url ?? null,
+      })) ?? [];
+
+    setPosts(normalized);
+  }, []);
+
+  useEffect(() => {
+    fetchPosts();
+  }, [fetchPosts]);
+
+  const dataset = useMemo(() => {
+    const base = tab === 'New' ? rankNew(posts) : rankTop(posts);
+    return deDupeSimilar(base) as Post[];
+  }, [posts, tab]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchPosts();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchPosts]);
+
+  const renderItem: ListRenderItem<Post> = ({ item }) => (
+    <PostCard
+      post={item}
+      variant="list"
+      onPress={() => {
+        /* open PostSheet like your Map tab does */
+      }}
+      onViewMap={() => {
+        /* switch to Map tab and recenter */
+      }}
+    />
   );
-}
+
+  return (
+    <View style={styles.container}>
+      {/* Simple Top/New toggle */}
+      <View style={styles.feedTabs}>
+        {(['Top', 'New'] as const).map((t) => (
+          <Text
+            key={t}
+            onPress={() => setTab(t)}
+            style={[styles.feedTab, tab === t && styles.feedTabActive]}
+          >
+            {t}
+          </Text>
+        ))}
+      </View>
+
+      <FlatList
+        data={dataset}
+        keyExtractor={(item) => String(item.id)}
+        renderItem={renderItem}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        contentContainerStyle={{ paddingVertical: 8 }}
+      />
+    </View>
+  );
+};
+
+export default FeedTab;
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  container: { flex: 1, backgroundColor: '#FAFAFA' },
+  feedTabs: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    gap: 16,
+    padding: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E7EB',
+    backgroundColor: 'white',
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-  },
+  feedTab: { fontSize: 16, color: '#6B7280', fontWeight: '800' },
+  feedTabActive: { color: '#111827' },
 });
