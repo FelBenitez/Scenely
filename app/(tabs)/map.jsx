@@ -440,6 +440,14 @@ export default function MapTab() {
   };
 }, []);
 
+  function recenterTo({ lng, lat, zoom = 17 }) {
+  cameraRef.current?.setCamera({
+    centerCoordinate: [lng, lat],
+    zoomLevel: zoom,
+    animationDuration: 500,
+  });
+  }
+
 
   // Stable jitter based on user_id hash (FIXED: handles negative hashes)
   function stableJitter(userId, meters = 8) {
@@ -1446,6 +1454,7 @@ const postsGeoJSON = useMemo(() => {
    post={sheetOpen ? selectedPost : null}
    onClose={() => { setSheetOpen(false); setSelectedPost(null); }}
    userId={userId}
+   onRecenterMap={recenterTo}
  />
 
       {/* Designing button */}
