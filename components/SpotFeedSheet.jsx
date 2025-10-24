@@ -1,12 +1,17 @@
 // components/SpotFeedSheet.jsx
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList, Animated, Dimensions, Pressable, Modal } from 'react-native';
-import { BlurView } from 'expo-blur';
 import PostCard from './PostCard';
 import { deDupeSimilar, rankNew, rankTop } from '../utils/ranking';
 import { Feather } from '@expo/vector-icons';
 
 const SCREEN_H = Dimensions.get('window').height;
+const SHEET_HEIGHT = SCREEN_H * 0.85;
+
+// Sheet snaps
+const SNAP_EXPANDED = 0;
+const SNAP_MID = SHEET_HEIGHT * 0.47;  // Opens here (mid-height)
+const SNAP_CLOSED = SHEET_HEIGHT;
 
 export default function SpotFeedSheet({
   visible,
@@ -19,34 +24,136 @@ export default function SpotFeedSheet({
 }) {
   const [tab, setTab] = useState('Top');
   const [asList, setAsList] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const scrollY = useRef(0);
   
-  const translateY = useRef(new Animated.Value(SCREEN_H)).current;
+  const translateY = useRef(new Animated.Value(SNAP_CLOSED)).current;
+  
+  useEffect(() => {
+    const subId = translateY.addListener(({ value }) => {
+      // consider it expanded when very close to the expanded snap
+      setIsExpanded(value <= SNAP_EXPANDED + 2);
+    });
+    return () => {
+      if (subId) translateY.removeListener(subId);
+    };
+  }, [translateY]);
 
-  // Simple open/close animation
+  const backdropOpacity = translateY.interpolate({
+    inputRange: [SNAP_EXPANDED, SNAP_CLOSED],
+    outputRange: [0.6, 0],
+    extrapolate: 'clamp',
+  });
+
+  // Open/close animation
   useEffect(() => {
     if (visible) {
       console.log('[SpotFeedSheet] Opening with', posts.length, 'posts');
       Animated.spring(translateY, {
-        toValue: 0,
+        toValue: SNAP_MID,
         useNativeDriver: true,
-        damping: 20,
+        damping: 25,
         stiffness: 300,
-      }).start();
+      }).start(() => setIsExpanded(false));
     } else {
       Animated.timing(translateY, {
-        toValue: SCREEN_H,
+        toValue: SNAP_CLOSED,
         duration: 250,
         useNativeDriver: true,
       }).start();
     }
   }, [visible]);
 
+  const closeSheet = () => {
+    Animated.timing(translateY, {
+      toValue: SNAP_CLOSED,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(() => {
+      setIsExpanded(false);
+      onClose?.();
+    });
+  };
+
+  // Pan gesture handling
+  const panStartY = useRef(0);
+  const touchStartY = useRef(0);
+  const lastTouchY = useRef(0);
+  const lastTouchTime = useRef(0);
+
+  const handleTouchStart = (pageY) => {
+    panStartY.current = translateY.__getValue();
+    touchStartY.current = pageY;
+    lastTouchY.current = pageY;
+    lastTouchTime.current = Date.now();
+  };
+
+  const handleTouchMove = (pageY) => {
+    const dy = pageY - touchStartY.current;
+    const newY = Math.max(SNAP_EXPANDED, Math.min(SNAP_CLOSED, panStartY.current + dy));
+    translateY.setValue(newY);
+    
+    lastTouchY.current = pageY;
+    lastTouchTime.current = Date.now();
+  };
+
+  const handleTouchEnd = (pageY) => {
+    const currentY = translateY.__getValue();
+    const dy = pageY - touchStartY.current;
+    
+    // Calculate velocity (pixels per ms)
+    const timeDiff = Date.now() - lastTouchTime.current;
+    const yDiff = pageY - lastTouchY.current;
+    const velocity = timeDiff > 0 ? yDiff / timeDiff : 0;
+    
+    // Determine snap target
+    let snapTo = SNAP_MID;
+    
+    // Fast swipe detection (velocity in pixels per ms)
+    if (Math.abs(velocity) > 0.5) {
+      if (velocity > 0) {
+        // Swiping down fast
+        snapTo = currentY < SNAP_MID ? SNAP_MID : SNAP_CLOSED;
+      } else {
+        // Swiping up fast
+        snapTo = SNAP_EXPANDED;
+      }
+    } else if (Math.abs(dy) > 50) {
+      // Significant drag distance
+      if (dy > 0) {
+        snapTo = currentY < SNAP_MID ? SNAP_MID : SNAP_CLOSED;
+      } else {
+        snapTo = SNAP_EXPANDED;
+      }
+    } else {
+      // Small movement - snap to nearest
+      const distances = [
+        { pos: SNAP_EXPANDED, dist: Math.abs(currentY - SNAP_EXPANDED) },
+        { pos: SNAP_MID, dist: Math.abs(currentY - SNAP_MID) },
+        { pos: SNAP_CLOSED, dist: Math.abs(currentY - SNAP_CLOSED) },
+      ];
+      
+      distances.sort((a, b) => a.dist - b.dist);
+      snapTo = distances[0].pos;
+    }
+
+    // Animate to snap position
+    Animated.spring(translateY, {
+      toValue: snapTo,
+      useNativeDriver: true,
+      damping: 25,
+      stiffness: 300,
+    }).start(() => {
+      if (snapTo === SNAP_CLOSED) {
+        onClose?.();
+      }
+    });
+  };
+
   const dataset = useMemo(() => {
     const base = tab === 'New' ? rankNew(posts) : rankTop(posts);
     return deDupeSimilar(base);
   }, [posts, tab]);
-
-  const keyExtractor = (item) => String(item.id);
 
   const renderTile = ({ item, index }) => (
     <PostCard
@@ -64,13 +171,19 @@ export default function SpotFeedSheet({
       visible={visible}
       transparent
       animationType="none"
-      onRequestClose={onClose}
+      onRequestClose={closeSheet}
+      statusBarTranslucent
     >
       {/* Backdrop */}
-      <Pressable 
-        style={[StyleSheet.absoluteFill, styles.backdrop]} 
-        onPress={onClose}
-      />
+      <Pressable style={StyleSheet.absoluteFill} onPress={closeSheet}>
+        <Animated.View 
+          style={[
+            StyleSheet.absoluteFill, 
+            styles.backdrop, 
+            { opacity: backdropOpacity }
+          ]} 
+        />
+      </Pressable>
 
       {/* Sheet */}
       <Animated.View
@@ -80,14 +193,40 @@ export default function SpotFeedSheet({
             transform: [{ translateY }],
           }
         ]}
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={(e) => {
+          // Drag from anywhere if not expanded; when expanded, only drag if list is at top
+          const isScrollAtTop = scrollY.current <= 0;
+          return !isExpanded || isScrollAtTop;
+        }}
+        onResponderGrant={(e) => {
+          handleTouchStart(e.nativeEvent.pageY);
+        }}
+        onResponderMove={(e) => {
+          const isScrollAtTop = scrollY.current <= 0;
+          if (isScrollAtTop) {
+            handleTouchMove(e.nativeEvent.pageY);
+          }
+        }}
+        onResponderRelease={(e) => {
+          handleTouchEnd(e.nativeEvent.pageY);
+        }}
       >
         <View style={styles.sheet}>
-          {/* Grabber */}
-          <View style={styles.grabberRow}>
-            <View style={styles.grabber} />
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <Text style={styles.closeBtnText}>×</Text>
-            </TouchableOpacity>
+          {/* Drag Handle Area - Always draggable */}
+          <View 
+            style={styles.handleArea}
+            onStartShouldSetResponder={() => true}
+            onResponderGrant={(e) => handleTouchStart(e.nativeEvent.pageY)}
+            onResponderMove={(e) => handleTouchMove(e.nativeEvent.pageY)}
+            onResponderRelease={(e) => handleTouchEnd(e.nativeEvent.pageY)}
+          >
+            <View style={styles.grabberRow}>
+              <View style={styles.grabber} />
+              <TouchableOpacity onPress={closeSheet} style={styles.closeBtn}>
+                <Text style={styles.closeBtnText}>×</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Header */}
@@ -112,20 +251,24 @@ export default function SpotFeedSheet({
             ))}
           </View>
 
-          {/* Grid -> List */}
+          {/* Grid → List */}
           <FlatList
             data={dataset}
-            keyExtractor={keyExtractor}
+            keyExtractor={(item) => String(item.id)}
             key={asList ? 'list' : 'grid'}
             numColumns={asList ? 1 : 2}
             contentContainerStyle={{ paddingBottom: 28, paddingHorizontal: 8 }}
             onScroll={(e) => {
+              scrollY.current = e.nativeEvent.contentOffset.y;
               const y = e.nativeEvent.contentOffset.y;
               if (!asList && y > 120) setAsList(true);
               if (asList && y < 40) setAsList(false);
             }}
+            scrollEventThrottle={16}
             renderItem={renderTile}
             showsVerticalScrollIndicator={false}
+            bounces={false}
+            scrollEnabled={isExpanded}
             ListEmptyComponent={
               <View style={styles.empty}>
                 <Text style={styles.emptyText}>No posts at this spot</Text>
@@ -140,34 +283,36 @@ export default function SpotFeedSheet({
 
 const styles = StyleSheet.create({
   backdrop: {
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: '#000',
   },
   sheetContainer: {
-  position: 'absolute',
-  bottom: 0,
-  alignSelf: 'center',
-  width: '93%', // To change width of the bottom sheet to not go left-right
-  height: SCREEN_H * 0.85,
-  borderTopLeftRadius: 24,
-  borderTopRightRadius: 24,
-  overflow: 'hidden',
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: SHEET_HEIGHT,
+    alignItems: 'center',
   },
   sheet: {
     flex: 1,
+    width: '93%',
     backgroundColor: 'white',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 8,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
     shadowOffset: { width: 0, height: -4 },
-    elevation: 12,
+    elevation: 16,
+    overflow: 'hidden',
+  },
+  handleArea: {
+    paddingTop: 8,
+    paddingBottom: 4,
   },
   grabberRow: {
     alignItems: 'center',
-    paddingTop: 4,
-    paddingBottom: 8,
+    paddingVertical: 8,
     flexDirection: 'row',
     justifyContent: 'center',
     position: 'relative',
@@ -176,12 +321,12 @@ const styles = StyleSheet.create({
     width: 54,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#D1D5DB',
   },
   closeBtn: {
     position: 'absolute',
     right: 14,
-    top: 0,
+    top: 4,
     width: 32,
     height: 32,
     borderRadius: 16,
@@ -198,8 +343,8 @@ const styles = StyleSheet.create({
 
   header: {
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 6,
+    paddingTop: 4,
+    paddingBottom: 8,
   },
   title: {
     fontSize: 22,
@@ -209,7 +354,6 @@ const styles = StyleSheet.create({
   sub: {
     fontSize: 13,
     color: '#6B7280',
-    marginTop: 2,
   },
 
   tabs: {
