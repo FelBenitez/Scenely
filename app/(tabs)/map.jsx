@@ -335,6 +335,58 @@ async function fetchAvatarForUser(user_id) {
   }
 }
 
+// Upload a local image (expo-image-picker URI) to Supabase Storage and return a public URL
+async function uploadPhotoAsync(localUri, userId) {
+  try {
+    if (!localUri) return null;
+
+    // Extract file extension from URI
+    const ext = localUri.split('.').pop().toLowerCase();
+    const mimeTypes = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      heic: 'image/heic',
+      heif: 'image/heif',
+    };
+    const mime = mimeTypes[ext] || 'image/jpeg';
+
+    // Unique path: userId/epoch.ext
+    const filePath = `${userId || 'anon'}/${Date.now()}.${ext}`;
+
+    // For React Native, we need to use FormData or read as ArrayBuffer
+    // Option 1: Using fetch with ArrayBuffer (works in RN)
+    const response = await fetch(localUri);
+    const arrayBuffer = await response.arrayBuffer();
+    const fileData = new Uint8Array(arrayBuffer);
+
+    // Upload using the byte array
+    const { error: upErr } = await supabase
+      .storage
+      .from('post-photos')
+      .upload(filePath, fileData, { 
+        contentType: mime, 
+        upsert: false 
+      });
+
+    if (upErr) {
+      console.error('[uploadPhotoAsync] upload error:', upErr.message);
+      return null;
+    }
+
+    // Get a public URL (bucket is public per policy)
+    const { data: pub } = supabase
+      .storage
+      .from('post-photos')
+      .getPublicUrl(filePath);
+
+    return pub?.publicUrl || null;
+  } catch (e) {
+    console.error('[uploadPhotoAsync] unexpected error:', e);
+    return null;
+  }
+}
+
 
 export default function MapTab() {
   const cameraRef = useRef(null);
@@ -987,6 +1039,12 @@ const postsGeoJSON = useMemo(() => {
       const text = (textIn ?? draftText).trim();
       if (!text) return;
 
+      // If a photo was selected, upload it and get a public URL
+      let photoUrl = null;
+      if (photoUri) {
+        photoUrl = await uploadPhotoAsync(photoUri, userId);
+      }
+
       const { data, error } = await supabase
       .from('posts')
       .insert([{
@@ -994,10 +1052,10 @@ const postsGeoJSON = useMemo(() => {
         lat,
         lng,
         category,             // <- from composer
-        photo_url: null       // <- replace with uploaded URL when you wire photos
+        photo_url: photoUrl
         // expires_at will auto-default to +4h
       }])
-      .select();
+      .select(`id, text, lat, lng, created_at, expires_at, user_id, category, photo_url, profiles:user_id(avatar_url, username)`);
 
       if (error) {
         console.error('Error posting:', error);
@@ -1007,9 +1065,15 @@ const postsGeoJSON = useMemo(() => {
 
       if (data && data[0]) {
         lastPostTime.current = now;
-        setPosts(prev => [data[0], ...prev]);
+
+        const inserted = {...data[0],
+        avatar_url: data[0]?.profiles?.avatar_url ?? null,
+        username:   data[0]?.profiles?.username ?? null,
+      };
+
+
+        setPosts(prev => [inserted, ...prev]);
         setDraftText('');
-        // setComposerOpen(false);
 
         cameraRef.current?.setCamera({
           centerCoordinate: [lng, lat],
