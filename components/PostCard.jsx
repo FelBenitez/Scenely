@@ -19,38 +19,68 @@ export default function PostCard({
   const avatarUrl = post.avatar_url || post.profiles?.avatar_url || 'https://placehold.co/60x60/e5e7eb/9ca3af';
   
   if (variant === 'list') {
-    return (
-      <TouchableOpacity 
-        activeOpacity={0.9} 
-        onPress={() => onPress?.(post)} 
-        style={styles.listCard}
-      >
-        <View style={styles.row}>
-          <Image 
-            source={{ uri: avatarUrl }} 
-            style={styles.avatarLg}
-          />
-          <View style={{ flex: 1 }}>
-            <Text numberOfLines={2} style={styles.title}>
-              {post.text || 'No caption'}
-            </Text>
-            <Text style={styles.meta}>
-              📍 {distance || 'nearby'} · ⏱ {minsLeft}m left
-            </Text>
-          </View>
-          <TouchableOpacity 
-            onPress={(e) => {
-              e.stopPropagation(); // Prevent triggering parent onPress
-              onViewMap?.(post);
-            }} 
-            style={styles.heartPill}
-          >
-            <Text style={styles.heartText}>❤️ {post.reactions || 0}</Text>
-          </TouchableOpacity>
+  const heartCount = post.reactions || 0;
+  const commentCount = post.comments || 0;
+  const timeAgo = post.created_at
+    ? (() => {
+        const mins = Math.max(0, Math.floor((Date.now() - new Date(post.created_at)) / 60000));
+        if (mins < 60) return `${mins}m`;
+        const h = Math.floor(mins / 60);
+        return `${h}h`;
+      })()
+    : '';
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onPress={() => onPress?.(post)}
+      style={styles.card}
+    >
+      {/* Header row */}
+      <View style={styles.cardHeader}>
+        <Image source={{ uri: avatarUrl }} style={styles.avatarLg} />
+        <View style={{ flex: 1 }}>
+          <Text numberOfLines={1} style={styles.author}>
+            {post.profiles?.username || 'Someone'}
+          </Text>
+          <Text numberOfLines={1} style={styles.metaRow}>
+            <Text style={styles.metaDim}>{timeAgo} ago</Text>
+            <Text>  ·  </Text>
+            <Text style={styles.metaDim}>{distance || 'nearby'}</Text>
+          </Text>
         </View>
-      </TouchableOpacity>
-    );
-  }
+        {/* tiny thumbnail if photo */}
+        {post.photo_url ? (
+          <Image source={{ uri: post.photo_url }} style={styles.thumb} />
+        ) : null}
+      </View>
+
+      {/* Body */}
+      {!!post.text && (
+        <Text numberOfLines={2} style={styles.bodyText}>
+          {post.text}
+        </Text>
+      )}
+
+      {/* Footer */}
+      <View style={styles.footer}>
+        <Text style={styles.footerPill}>❤️ {heartCount}</Text>
+        <Text style={[styles.footerPill, { marginLeft: 12 }]}>💬 {commentCount}</Text>
+
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity
+          onPress={(e) => {
+            e.stopPropagation();
+            onViewMap?.(post);
+          }}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
+          <Text style={styles.pinText}>📍</Text>
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
+}
 
   // Tile variant
 // Tile variant
@@ -231,5 +261,28 @@ const styles = StyleSheet.create({
   flexDirection: 'row',
   alignItems: 'center',
   justifyContent: 'space-between',
-},
+  },
+  card: {
+  backgroundColor: 'white',
+  borderRadius: 18,
+  padding: 12,
+  marginHorizontal: 14,
+  marginVertical: 8,
+  shadowColor: '#000',
+  shadowOpacity: 0.06,
+  shadowRadius: 10,
+  shadowOffset: { width: 0, height: 4 },
+  elevation: 2,
+  borderWidth: StyleSheet.hairlineWidth,
+  borderColor: '#F1F5F9',
+  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  author: { fontSize: 15, fontWeight: '800', color: '#111' },
+  metaRow: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+  metaDim: { color: '#6B7280', fontWeight: '600' },
+  thumb: { width: 46, height: 46, borderRadius: 10, backgroundColor: '#eee' },
+  bodyText: { marginTop: 8, fontSize: 15, color: '#111' },
+  footer: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
+  footerPill: { fontWeight: '700', color: '#6B7280' },
+  pinText: { fontSize: 16, color: '#6B7280' },
 });
