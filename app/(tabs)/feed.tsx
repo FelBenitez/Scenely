@@ -38,7 +38,7 @@ const FeedTab: React.FC = () => {
   const [selected, setSelected] = useState<Post | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
-  // ---- POSTS ----
+  // POSTS 
   const fetchPosts = useCallback(async () => {
     // wider window so the feed isn't empty early on
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -46,7 +46,6 @@ const FeedTab: React.FC = () => {
     const { data, error } = await supabase
       .from('posts')
       .select(
-        // IMPORTANT: no "reactions" or "comments" here — those columns do not exist
         'id, text, lat, lng, created_at, expires_at, user_id, photo_url, category, profiles:user_id(avatar_url, username)'
       )
       .gt('created_at', since)
@@ -195,7 +194,7 @@ const FeedTab: React.FC = () => {
     return () => { supabase.removeChannel(likeChan).catch(() => {}); };
   }, [userId]);
 
-  // ---- ONLINE COUNT.. matches Map logic: last 10 minutes) ----
+  // ONLINE COUNT.. matches Map logic: last 10 minutes) ----
   const pollOnline = useCallback(async () => {
     const sinceIso = new Date(Date.now() - ONLINE_WINDOW_MIN * 60_000).toISOString();
     // Use a HEAD count for efficiency
@@ -213,7 +212,7 @@ const FeedTab: React.FC = () => {
     return () => clearInterval(id);
   }, [pollOnline]);
 
-  // ---- DATASET / REFRESH ----
+  // DATASET / REFRESH 
   const dataset = useMemo(() => {
     const base = tab === 'New' ? rankNew(posts) : rankTop(posts);
     return deDupeSimilar(base) as Post[];
@@ -224,7 +223,7 @@ const FeedTab: React.FC = () => {
     try { await fetchPosts(); await pollOnline(); } finally { setRefreshing(false); }
   }, [fetchPosts, pollOnline]);
 
-  // ---- RENDER ----
+  // RENDER
   return (
     <SafeAreaView style={styles.screen}>
       {/* Header */}
@@ -268,7 +267,32 @@ const FeedTab: React.FC = () => {
           post={selected}
           onClose={() => setSelected(null)}
           userId={userId ?? undefined}
-          onRecenterMap={() => { /* no-op on feed; map recenter not applicable */ }}
+
+          onRecenterMap={({ lng, lat, zoom }: { lng: number; lat: number; zoom?: number }) => {
+          // 1) Close the sheet immediately in this tab
+          const focusId = String(selected?.id ?? '');
+          setSelected(null);
+
+          // 2) Navigate on the next frame so the modal is already unmounted
+          const go = () => {
+            if (Number.isFinite(lat) && Number.isFinite(lng)) {
+              router.push({
+                pathname: '/(tabs)/map',
+                params: {
+                  lat: String(lat),
+                  lng: String(lng),
+                  zoom: String(zoom ?? 17),
+                  focusId,
+                },
+              });
+            } else {
+              router.push('/(tabs)/map');
+            }
+          };
+          // Use RAF instead of setTimeout to line up with commit
+          requestAnimationFrame(go);
+        }}
+
         />
       )}
     </SafeAreaView>

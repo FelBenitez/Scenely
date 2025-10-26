@@ -1,6 +1,7 @@
 // components/PostCard.jsx
 import React from 'react';
 import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
+import { Heart, MessageCircle, MapPin } from 'lucide-react-native';
 import { minutesLeftFor } from '../utils/ranking';
 
 export default function PostCard({
@@ -64,10 +65,22 @@ export default function PostCard({
 
       {/* Footer */}
       <View style={styles.footer}>
-        <Text style={styles.footerPill}>❤️ {heartCount}</Text>
-        <Text style={[styles.footerPill, { marginLeft: 12 }]}>💬 {commentCount}</Text>
+        <View style={styles.metaPill}>
+          <Heart
+            size={16}
+            color={post.likedByMe ? '#DC2626' : '#111'}
+            fill={post.likedByMe ? '#DC2626' : 'transparent'}
+          />
+          <Text style={styles.countText}>{heartCount}</Text>
+        </View>
+
+        <View style={[styles.metaPill, { marginLeft: 12 }]}>
+          <MessageCircle size={16} color="#111" />
+          <Text style={styles.countText}>{commentCount}</Text>
+        </View>
 
         <View style={{ flex: 1 }} />
+
         <TouchableOpacity
           onPress={(e) => {
             e.stopPropagation();
@@ -75,7 +88,9 @@ export default function PostCard({
           }}
           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         >
-          <Text style={styles.pinText}>📍</Text>
+          <View style={styles.metaPill}>
+            <MapPin size={16} color="#6B7280" />
+          </View>
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
@@ -285,4 +300,6 @@ const styles = StyleSheet.create({
   footer: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
   footerPill: { fontWeight: '700', color: '#6B7280' },
   pinText: { fontSize: 16, color: '#6B7280' },
+  metaPill: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  countText: { fontWeight: '700', color: '#6B7280' },
 });

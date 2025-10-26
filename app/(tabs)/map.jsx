@@ -17,6 +17,7 @@ import PinMarker, { categoryTint } from '../../components/ui/PinMarker';
 import SpotMarker from '../../components/ui/SpotMarker';
 import PetalMarker from '../../components/ui/PetalMarker';
 import SpotFeedSheet from '../../components/SpotFeedSheet';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 
 // Sprite(s) for post pins
@@ -488,6 +489,40 @@ export default function MapTab() {
   }, []);
 
 
+
+  const router = useRouter();
+  const params = useLocalSearchParams();
+
+  // Recenter/focus when arriving with params from Feed
+  useEffect(() => {
+   const { lat, lng, zoom, focusId } = params || {};
+   const hasCoords = lat != null && lng != null;
+   if (!hasCoords && !focusId) return;
+
+   const latNum  = hasCoords ? parseFloat(String(lat))  : undefined;
+   const lngNum  = hasCoords ? parseFloat(String(lng))  : undefined;
+   const zoomNum = zoom != null ? parseFloat(String(zoom)) : 17;
+
+   if (Number.isFinite(latNum) && Number.isFinite(lngNum)) {
+     recenterTo({ lat: latNum, lng: lngNum, zoom: zoomNum });
+   }
+
+   if (focusId) {
+     const p = posts.find(x => String(x.id) === String(focusId));
+     if (p) {
+       setSelectedPost(p);
+       setSheetOpen(false); // tap behavior: focus first; open sheet on second tap if you prefer
+     }
+   }
+
+   // Clear params so it won't retrigger when map state updates
+   try { router.setParams({ lat: undefined, lng: undefined, zoom: undefined, focusId: undefined }); } catch {}
+ // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [params, posts]);
+
+
+
+ 
 
   useEffect(() => {
   let channel;
