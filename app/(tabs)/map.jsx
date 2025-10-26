@@ -18,6 +18,10 @@ import SpotMarker from '../../components/ui/SpotMarker';
 import PetalMarker from '../../components/ui/PetalMarker';
 import SpotFeedSheet from '../../components/SpotFeedSheet';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import LiveMarker from '../../components/ui/LiveMarker';
+import LiveClusterMarker from '../../components/ui/LiveClusterMarker';
+import { groupLiveUsers } from '../../utils/liveGroups';
+import { LIVE_GROUP_RADIUS_M, RING_BY_BUCKET } from '../../constants/map';
 
 
 // Sprite(s) for post pins
@@ -441,6 +445,16 @@ export default function MapTab() {
   const MAX_LIVE_MIN = 45;     // hide after 45 minutes
   // Buckets: live<=2, warm<=10, cooling<=30, else stale<=45(hidden)
 
+  // movement + timing control
+  const locWatchRef = useRef(null);           // expo-location subscription
+  const lastDeviceCoordRef = useRef(null);    // { lat, lng } from watchPosition
+  const lastHeartbeatAtRef = useRef(0);       // ms timestamp of last write
+  const lastHeartbeatCoordRef = useRef(null); // last sent coord (after coarse/jitter)
+
+  // polling backoff (seconds)
+  const [pollIntervalMs, setPollIntervalMs] = useState(20_000); // backs off when idle
+  const MIN_MOVE_METERS = 20;       // only react if you moved more than this
+  const HEARTBEAT_MIN_INTERVAL = 60_000; // always send at least once a minute
 
 
   const [userId, setUserId] = useState(null);
@@ -521,15 +535,11 @@ export default function MapTab() {
  }, [params, posts]);
 
 
-
- 
-
   useEffect(() => {
   let channel;
 
   const handler = async (payload) => {
     console.log('[RT posts] change:', payload?.eventType, payload?.new?.id);
-    // ...your existing insert/delete handlers...
   };
 
   channel = supabase
@@ -546,6 +556,56 @@ export default function MapTab() {
     supabase.removeChannel(channel).catch(()=>{});
   };
 }, []);
+
+
+  // live device location subscription (cheap + accurate)
+  useEffect(() => {
+    // clean up helper
+    const stop = () => {
+      try { locWatchRef.current?.remove?.(); } catch {}
+      locWatchRef.current = null;
+    };
+
+    if (!shareLive) { stop(); return; }
+
+    (async () => {
+      try {
+        // ensure permission (already asked once, but this is safe)
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') { stop(); return; }
+
+        // subscribe: accuracy balanced, update on ~20–25m or ~20s
+        locWatchRef.current = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            distanceInterval: 20, // meters
+            timeInterval: 20_000, // ms (iOS may ignore if stationary)
+            mayShowUserSettingsDialog: false,
+          },
+          (loc) => {
+            if (!loc?.coords) return;
+            const { latitude, longitude } = loc.coords;
+
+            // keep a live copy for heartbeat decisions
+            lastDeviceCoordRef.current = { latitude, longitude };
+
+            // also keep your userLoc (used elsewhere)
+            setUserLoc({ latitude, longitude });
+
+            // if we moved materially OR it's been > 60s, send heartbeat
+            maybeSendHeartbeat();
+          }
+        );
+      } catch (e) {
+        console.warn('[LiveLoc] watchPosition error:', e?.message || e);
+        stop();
+      }
+    })();
+
+    return stop;
+  }, [shareLive]);
+
+  
 
   function recenterTo({ lng, lat, zoom = 17 }) {
   cameraRef.current?.setCamera({
@@ -608,7 +668,11 @@ export default function MapTab() {
   }, [liveUsers]);
 
 
-
+  // Group nearby live users into simple clusters
+  const liveGroups = useMemo(
+    () => groupLiveUsers(liveUsers, LIVE_GROUP_RADIUS_M),
+    [liveUsers]
+  );
 
 
 
@@ -881,45 +945,87 @@ const postsGeoJSON = useMemo(() => {
     };
   }, []);
 
-  // [LIVELOC] WRITE: heartbeat your coarse+jittered location every 20s
-  async function sendHeartbeat() {
-    try {
-      // if we don't have a cached location, try once (non-blocking)
-      let lat = userLoc?.latitude;
-      let lng = userLoc?.longitude;
-      if (lat == null || lng == null) {
-        const { coords } = await Location.getCurrentPositionAsync({});
-        lat = coords.latitude;
-        lng = coords.longitude;
-      }
-      if (lat == null || lng == null) return;
 
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
 
-      const coarse = coarseAndJitter(lat, lng, user.id); // Pass user.id for stable jitter
+  function shouldSendHeartbeat({ lat, lng }) {
+  const now = Date.now();
+  const since = now - (lastHeartbeatAtRef.current || 0);
 
-      const { error } = await supabase
-        .from('live_locations')
-        .upsert({
-          user_id: user.id,
-          lat: coarse.lat,
-          lng: coarse.lng,
-          grid_id: coarse.gridId,
-          last_seen: new Date().toISOString(),
-        });
+  // time gate: at least once per minute
+  const timeGate = since >= HEARTBEAT_MIN_INTERVAL;
 
-      if (error) {
-        console.error('[LiveLoc] Heartbeat failed:', error.message);
-      }
-    } catch (e) {
-      console.error('[LiveLoc] Heartbeat error:', e);
-    }
+  // distance gate: > 20m vs last heartbeat coord (coarse/jitter AFTER we compute distance vs lastDeviceCoord)
+  let distGate = false;
+  if (lastHeartbeatCoordRef.current) {
+    const d = distanceInMeters(
+      lastHeartbeatCoordRef.current.lat,
+      lastHeartbeatCoordRef.current.lng,
+      lat,
+      lng
+    );
+    distGate = d >= MIN_MOVE_METERS;
+  } else {
+    // first time, allow
+    distGate = true;
   }
+
+  return timeGate || distGate;
+}
+
+  async function maybeSendHeartbeat() {
+  try {
+    if (!shareLive) return;
+
+    // prefer the watcher’s latest reading; fallback to a one-shot
+    let lat = lastDeviceCoordRef.current?.latitude ?? userLoc?.latitude;
+    let lng = lastDeviceCoordRef.current?.longitude ?? userLoc?.longitude;
+
+    if (lat == null || lng == null) {
+      try {
+        const { coords } = await Location.getCurrentPositionAsync({});
+        lat = coords.latitude; lng = coords.longitude;
+      } catch { return; }
+    }
+
+    if (!shouldSendHeartbeat({ lat, lng })) return;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // privacy: coarse grid + user-stable jitter
+    const coarse = coarseAndJitter(lat, lng, user.id);
+
+    const { error } = await supabase
+      .from('live_locations')
+      .upsert({
+        user_id: user.id,
+        lat: coarse.lat,
+        lng: coarse.lng,
+        grid_id: coarse.gridId,
+        last_seen: new Date().toISOString(),
+      });
+
+    if (error) {
+      console.error('[LiveLoc] Heartbeat failed:', error.message);
+      return;
+    }
+
+    // update last-sent markers
+    lastHeartbeatAtRef.current = Date.now();
+    lastHeartbeatCoordRef.current = { lat: coarse.lat, lng: coarse.lng };
+  } catch (e) {
+    console.error('[LiveLoc] Heartbeat error:', e);
+  }
+  }
+
+
 
   // [LIVELOC] READ: poll nearby users every 20s (last <= 60min; hide > 45min in UI)
   async function pollNearby() {
     try {
+      // gradually back off when nothing changes; reset when changes arrive
+      let beforeHash = JSON.stringify(liveUsers.map(u => [u.user_id, u.lat, u.lng])); 
+
       // simple bounding box around current user to trim payload
       const center = userLoc ?? { latitude: 30.2849, longitude: -97.7341 };
       const latPad = 0.2; // ~22km; tune for campus size
@@ -944,51 +1050,56 @@ const postsGeoJSON = useMemo(() => {
 
       if (Array.isArray(data)) {
         setLiveUsers(data);
+
+
+        const afterHash = JSON.stringify((data || []).map(u => [u.user_id, u.lat, u.lng]));
+        if (afterHash !== beforeHash) {
+          // changes seen -> stay snappy
+          if (pollIntervalMs !== 20_000) setPollIntervalMs(20_000);
+        } else {
+          // no changes -> back off gently up to 60s
+          if (pollIntervalMs < 60_000) setPollIntervalMs(pollIntervalMs * 2);
+        }
       }
     } catch (e) {
       console.error('[LiveLoc] Poll error:', e);
     }
   }
 
-  // [LIVELOC] start/stop loops depending on app state and toggle
+    // polling loop with simple backoff
+  useEffect(() => {
+    // clear any running timers
+    if (pollRef.current) clearInterval(pollRef.current);
+
+    if (!pollingActive) return;
+    // do an immediate poll for snappy UI
+    pollNearby();
+
+    pollRef.current = setInterval(pollNearby, pollIntervalMs);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [pollingActive, pollIntervalMs]);
+
+  // on app resume: instant poll + heartbeat
   useEffect(() => {
     const onAppStateChange = (state) => {
-      const goingBg = appState.current.match(/active/) && state.match(/inactive|background/);
+      const wasActive = appState.current === 'active';
       appState.current = state;
-      if (goingBg) {
-        // pause loops
-        if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-        if (pollRef.current) clearInterval(pollRef.current);
-      } else if (state === 'active' && shareLive && pollingActive) {
-        // resume
-        sendHeartbeat();
+
+      if (state === 'active') {
+        // instant “catch up”
         pollNearby();
-        heartbeatRef.current = setInterval(sendHeartbeat, HEARTBEAT_MS);
-        pollRef.current = setInterval(pollNearby, POLL_MS);
+        maybeSendHeartbeat();
+        // reset poll interval after resume
+        setPollIntervalMs(20_000);
+      } else if (wasActive && state.match(/inactive|background/)) {
+        // nothing to do; loops are already cleaned by other effect
       }
     };
     const sub = AppState.addEventListener('change', onAppStateChange);
     return () => sub.remove();
-  }, [shareLive, pollingActive]);
-
-  
-
-  // [LIVELOC] boot loops when mounted (and sharing on)
-  useEffect(() => {
-    if (!shareLive || !pollingActive) {
-      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-      if (pollRef.current) clearInterval(pollRef.current);
-      return;
-    }
-    sendHeartbeat();
-    pollNearby();
-    heartbeatRef.current = setInterval(sendHeartbeat, HEARTBEAT_MS);
-    pollRef.current = setInterval(pollNearby, POLL_MS);
-    return () => {
-      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [shareLive, pollingActive]);
+  }, []);
 
   // Animate position changes only when users move
   useEffect(() => {
@@ -1353,52 +1464,55 @@ const postsGeoJSON = useMemo(() => {
   );
 })}
 
+        {/* [LIVELOC] render grouped live users (no taps, no labels) */}
+        {liveGroups.map((g, idx) => {
+          const members = g.members || [];
+          if (members.length === 0) return null;
 
+          // Use animated positions for centroid if available
+          const coords = members.map((u) => {
+            const pos = animatedPositions.get(u.user_id);
+            return {
+              lat: pos?.lat ?? u.lat,
+              lng: pos?.lng ?? u.lng,
+              last_seen: u.last_seen,
+              avatar_url: u.avatar_url,
+              user_id: u.user_id,
+            };
+          });
+          const lat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
+          const lng = coords.reduce((s, p) => s + p.lng, 0) / coords.length;
 
-        {/* [LIVELOC] render live users with age buckets */}
-        {liveUsers.map((u) => {
-          if (!Number.isFinite(u?.lat) || !Number.isFinite(u?.lng) || !u?.last_seen) return null;
-          
-          const mins = (Date.now() - new Date(u.last_seen).getTime()) / 60000;
-          const { bucket, opacity, label } = classifyAge(mins);
+          // pick the "youngest" (most recent) last_seen to color the ring
+          const youngestMins = Math.min(
+            ...coords.map((p) => (Date.now() - new Date(p.last_seen).getTime()) / 60000)
+          );
+
+          const { bucket } = classifyAge(youngestMins);
           if (bucket === 'hide') return null;
-          
-          // Use animated position if available, otherwise use raw position
-          const pos = animatedPositions.get(u.user_id) || { lat: u.lat, lng: u.lng };
-          
-          const showAvatar = !!u.avatar_url;
-          
+
+          const ringColor = RING_BY_BUCKET[bucket] || '#9ca3af';
+
           return (
             <MapboxGL.MarkerView
-              key={`live-${u.user_id}`}
-              id={`live-${u.user_id}`}
-              coordinate={[pos.lng, pos.lat]}
-              anchor={{ x: 0.5, y: 1 }}
+              key={`livegrp-${idx}`}
+              id={`livegrp-${idx}`}
+              coordinate={[lng, lat]}
+              anchor={{ x: 0.5, y: 0.5 }} // centered circles
             >
-              <View style={{ alignItems: 'center', opacity }}>
-                <View style={[
-                  styles.liveBadge,
-                  bucket === 'live' && styles.liveSolid,
-                  bucket === 'warm' && styles.liveWarm,
-                  bucket === 'cooling' && styles.liveCooling,
-                  bucket === 'stale' && styles.liveStale,
-                ]}>
-                  {showAvatar ? (
-                    <View style={styles.avatarCircle}>
-                      <MapboxGL.Images images={{}} />{/* placeholder to avoid warnings */}
-                      <View style={styles.avatarWrap}>
-                        {/* RN <Image> inside marker */}
-                        <View style={styles.avatarImgWrap}>
-                          <Text style={{display:'none'}}>{u.username ?? ''}</Text>
-                        </View>
-                      </View>
-                    </View>
-                  ) : (
-                    <View style={styles.dot}/>
-                  )}
-                </View>
-                <Text style={styles.liveLabel}>{label}</Text>
-              </View>
+              {members.length === 1 ? (
+                <LiveMarker
+                  ringColor={ringColor}
+                  avatarUrl={coords[0]?.avatar_url || null}
+                  size={32}
+                />
+              ) : (
+                <LiveClusterMarker
+                  ringColor={ringColor}
+                  count={members.length}
+                  size={36}
+                />
+              )}
             </MapboxGL.MarkerView>
           );
         })}
@@ -1467,19 +1581,16 @@ const postsGeoJSON = useMemo(() => {
         }}
       >
         <TopBar
-          sharing={shareLive}
-          onlineCount={onlineCount}
-          onToggle={(next) => {
-            setShareLive(next);
-            if (next && pollingActive) {
-              sendHeartbeat();
-              pollNearby();
-            }
-          }}
-          onFilterPress={() => {
-            console.log('Filter pressed');
-          }}
-        />
+        sharing={shareLive}
+        onlineCount={onlineCount}
+        onToggle={(next) => {
+          setShareLive(next);
+          // instant actions for responsiveness
+          if (next) { maybeSendHeartbeat(); }
+          if (pollingActive) { pollNearby(); }
+        }}
+        onFilterPress={() => { console.log('Filter pressed'); }}
+      />
       </View>
 
       {/* <Modal
@@ -1561,7 +1672,13 @@ const postsGeoJSON = useMemo(() => {
           styles.fab,
           { left: 16, bottom: 24, backgroundColor: pollingActive ? '#22c55e' : '#9CA3AF' },
         ]}
-        onPress={() => setPollingActive((p) => !p)}
+        onPress={() => {
+          setPollingActive((p) => {
+            const next = !p;
+            if (!p) pollNearby(); // turning ON → poll now for instant feedback
+            return next;
+          });
+        }}
       >
         <Text style={styles.fabText}>
           {pollingActive ? 'Polling' : 'Not polling'}
