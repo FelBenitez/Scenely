@@ -22,6 +22,8 @@ import LiveMarker from '../../components/ui/LiveMarker';
 import LiveClusterMarker from '../../components/ui/LiveClusterMarker';
 import { groupLiveUsers } from '../../utils/liveGroups';
 import { LIVE_GROUP_RADIUS_M, RING_BY_BUCKET } from '../../constants/map';
+import LiveRingMarker from '../../components/ui/LiveRingMarker';
+import LiveClusterSheet from '../../components/LiveClusterSheet';
 
 
 // Sprite(s) for post pins
@@ -93,6 +95,21 @@ function distanceLabelForCluster(cluster, userLoc) {
   const lng = cluster.reduce((s, p) => s + (p.lng || 0), 0) / cluster.length;
   const meters = distanceInMeters(userLoc.latitude, userLoc.longitude, lat, lng);
   return formatMilesLabel(meters);
+}
+
+// Live user clustering (minutesSince, youngestMinutes, sortByRecency)
+function minutesSince(ts) {
+  return Math.max(0, Math.round((Date.now() - new Date(ts || Date.now()).getTime()) / 60000));
+}
+
+function youngestMinutes(members) {
+  if (!members?.length) return Infinity;
+  return Math.min(...members.map(m => minutesSince(m.last_seen)));
+}
+
+// Most recent first
+function sortByRecency(members) {
+  return members.slice().sort((a, b) => new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime());
 }
 
 // Petal offset positions (in pixels) for different counts
@@ -244,7 +261,6 @@ function pickHero(arr) {
 }
 
 // ---- Flower (petals) helpers ----
-
 // When to show petals
 const FLOWER_MIN_ZOOM = 16.5;
 // Max # of petals shown around the hero
@@ -476,6 +492,14 @@ export default function MapTab() {
 
   // DEV: live-design mode (force upgrades everywhere)
   const [designMode, setDesignMode] = useState(false);
+
+
+  // Live cluster display thresholds
+  const LIVE_COUNT_ONLY_ZOOM = 15;   // below this -> count bubble
+  // Petals should appear as soon as we’re not in countOnly mode
+  const LIVE_FLOWER_MIN_ZOOM = LIVE_COUNT_ONLY_ZOOM;
+  const LIVE_PETAL_MAX = 5;          // up to 5 petals
+  const [liveClusterSheet, setLiveClusterSheet] = useState(null); // { lat, lng, members }
 
   // Global minute tick (keeps PinMarker progress cheap and in sync)
   const [minuteTick, setMinuteTick] = useState(0);
@@ -1464,13 +1488,13 @@ const postsGeoJSON = useMemo(() => {
   );
 })}
 
-        {/* [LIVELOC] render grouped live users (no taps, no labels) */}
+        {/* [LIVELOC] render grouped live users with petals + +N badge */}
         {liveGroups.map((g, idx) => {
           const members = g.members || [];
-          if (members.length === 0) return null;
+          if (!members.length) return null;
 
-          // Use animated positions for centroid if available
-          const coords = members.map((u) => {
+          // Centroid (you already compute animated positions above)
+          const coords = members.map(u => {
             const pos = animatedPositions.get(u.user_id);
             return {
               lat: pos?.lat ?? u.lat,
@@ -1478,41 +1502,110 @@ const postsGeoJSON = useMemo(() => {
               last_seen: u.last_seen,
               avatar_url: u.avatar_url,
               user_id: u.user_id,
+              username: u.username,
             };
           });
           const lat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
           const lng = coords.reduce((s, p) => s + p.lng, 0) / coords.length;
 
-          // pick the "youngest" (most recent) last_seen to color the ring
-          const youngestMins = Math.min(
-            ...coords.map((p) => (Date.now() - new Date(p.last_seen).getTime()) / 60000)
-          );
-
-          const { bucket } = classifyAge(youngestMins);
+          // Ring color via youngest member
+          const youngest = youngestMinutes(coords);
+          const { bucket } = classifyAge(youngest);
           if (bucket === 'hide') return null;
-
           const ringColor = RING_BY_BUCKET[bucket] || '#9ca3af';
+
+          const count = coords.length;
+          const zoom = cameraInfo?.zoom ?? 0;
+          const countOnly = zoom < LIVE_COUNT_ONLY_ZOOM; // always allow petals when sufficiently zoomed
+
+          // Count bubble at low zoom or very dense groups
+          if (countOnly) {
+            return (
+              <MapboxGL.MarkerView
+                key={`livegrp-${idx}`}
+                id={`livegrp-${idx}`}
+                coordinate={[lng, lat]}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <LiveClusterMarker ringColor={ringColor} count={count} size={36} />
+                </View>
+              </MapboxGL.MarkerView>
+            );
+          }
+
+          // Zoomed-in “flower” (1+)
+          const sorted = sortByRecency(coords);
+          const hero = sorted[0];
+          const petals = sorted.slice(1, LIVE_PETAL_MAX + 1); // up to 5 petals
+          const extra = Math.max(0, count - (1 + petals.length)); // remaining (for +N badge)
+          const petalOffsets = getPetalOffsets(petals.length);     // your existing helper
+
+          const onPressCluster = () => {
+            setLiveClusterSheet({ lat, lng, members: coords });
+          };
 
           return (
             <MapboxGL.MarkerView
               key={`livegrp-${idx}`}
               id={`livegrp-${idx}`}
               coordinate={[lng, lat]}
-              anchor={{ x: 0.5, y: 0.5 }} // centered circles
+              anchor={{ x: 0.5, y: 0.5 }}
             >
-              {members.length === 1 ? (
-                <LiveMarker
-                  ringColor={ringColor}
-                  avatarUrl={coords[0]?.avatar_url || null}
-                  size={32}
-                />
-              ) : (
-                <LiveClusterMarker
-                  ringColor={ringColor}
-                  count={members.length}
-                  size={36}
-                />
-              )}
+              <View style={{ position: 'relative', alignItems: 'center', justifyContent: 'center' }}>
+                {/* Petals (render whenever not in count-only mode) */}
+                {!countOnly && petals.map((m, i) => {
+                  const off = petalOffsets[i] || { x: 0, y: 0 };
+                  return (
+                    <View
+                      key={`petal-${m.user_id}`}
+                      style={{
+                        position: 'absolute',
+                        transform: [{ translateX: off.x }, { translateY: off.y }],
+                      }}
+                      pointerEvents="none"
+                    >
+                      <LiveRingMarker size={28} ringColor={ringColor} avatarUrl={m.avatar_url} />
+                    </View>
+                  );
+                })}
+
+                {/* Hero + +N badge */}
+                <View style={{ alignItems: 'center' }}>
+                  <View /* tap target */>
+                    <View style={{ alignItems: 'center' }}>
+                      <LiveRingMarker size={34} ringColor={ringColor} avatarUrl={hero?.avatar_url} />
+                      {/* Invisible overlay button */}
+                      <View
+                        style={{ position: 'absolute', top: -8, bottom: -8, left: -8, right: -8 }}
+                        onStartShouldSetResponder={() => true}
+                        onResponderRelease={onPressCluster}
+                      />
+                      {/* +N badge as centered overlay */}
+                      {extra > 0 && (
+                        <View
+                          style={{
+                            position: 'absolute',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: 34,
+                            height: 34,
+                            borderRadius: 17,
+                            backgroundColor: 'rgba(17,24,39,0.9)',
+                            borderWidth: 1.5,
+                            borderColor: 'white',
+                          }}
+                          pointerEvents="none"
+                        >
+                          <Text style={{ color: 'white', fontSize: 12, fontWeight: '800' }}>
+                            {extra >= 99 ? '+99' : `+${extra}`}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              </View>
             </MapboxGL.MarkerView>
           );
         })}
@@ -1714,6 +1807,18 @@ const postsGeoJSON = useMemo(() => {
       {/* Toast + Confetti overlays */}
       <Toast ref={toastRef} />
       <ConfettiBurst fire={confettiKey} />
+
+      {/* Live location sheet */}
+      <LiveClusterSheet
+        visible={!!liveClusterSheet}
+        group={liveClusterSheet}
+        onClose={() => setLiveClusterSheet(null)}
+        onCenterOnUser={(u) => {
+          if (u?.lng != null && u?.lat != null) {
+            recenterTo({ lng: u.lng, lat: u.lat, zoom: 17 });
+          }
+        }}
+      />
 
       {/* Primary FAB */}
       <FAB visible={!composerOpen} onPress={() => setComposerOpen(true)} />
