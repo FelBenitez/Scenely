@@ -1058,8 +1058,8 @@ const postsGeoJSON = useMemo(() => {
       const sinceIso = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // last 60 min
 
       const { data, error } = await supabase
-        .from('live_locations')
-        .select('user_id, lat, lng, last_seen, username, avatar_url')
+      .from('live_locations')
+      .select(`user_id, lat, lng, last_seen, profiles:user_id(avatar_url, username)`)
         .gt('last_seen', sinceIso)
         .gte('lat', center.latitude - latPad)
         .lte('lat', center.latitude + latPad)
@@ -1072,8 +1072,13 @@ const postsGeoJSON = useMemo(() => {
         return;
       }
 
-      if (Array.isArray(data)) {
-        setLiveUsers(data);
+       if (Array.isArray(data)) {
+        const withProfiles = data.map(u => ({
+          ...u,
+          avatar_url: u.profiles?.avatar_url ?? null,
+          username:   u.profiles?.username ?? null,
+        }));
+        setLiveUsers(withProfiles);
 
 
         const afterHash = JSON.stringify((data || []).map(u => [u.user_id, u.lat, u.lng]));
