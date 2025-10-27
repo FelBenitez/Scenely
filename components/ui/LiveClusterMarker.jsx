@@ -4,51 +4,37 @@ import { View, Text, StyleSheet } from 'react-native';
 
 export default function LiveClusterMarker({
   size = 36,
-  ringColor = '#60a5fa',
+  ringColor = '#22c55e',
   count = 2,
 }) {
-  const ring = Math.max(2, Math.round(size * 0.12));
-  const inner = size - ring * 2;
-  const label = count > 99 ? '99+' : String(count);
-
+  const s = {
+    width: size,
+    height: size,
+    borderRadius: size / 2,
+    borderColor: 'white',
+    borderWidth: 2,
+    backgroundColor: ringColor,
+  };
   return (
-    <View style={[styles.shadow, { width: size, height: size }]}>
-      <View
-        style={[
-          styles.ring,
-          {
-            borderColor: ringColor,
-            borderWidth: ring,
-            width: size,
-            height: size,
-            borderRadius: size / 2,
-          },
-        ]}
-      >
-        <View
-          style={[
-            styles.inner,
-            { width: inner, height: inner, borderRadius: inner / 2 },
-          ]}
-        >
-          <Text style={styles.count}>{label}</Text>
-        </View>
-      </View>
+    <View style={[styles.wrap, s]}>
+      <Text style={styles.txt}>{count >= 100 ? '99+' : String(count)}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  ring: {
+  wrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
   },
-  inner: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(17,24,39,0.88)', // near-black
+  txt: {
+    color: 'white',
+    fontWeight: '800',
+    fontSize: 13,
   },
-  count: { color: '#fff', fontWeight: '800', fontSize: 12 },
-  shadow: { alignItems: 'center', justifyContent: 'center' },
 });
