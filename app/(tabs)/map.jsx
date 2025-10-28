@@ -115,7 +115,7 @@ function sortByRecency(members) {
 // Petal offset positions (in pixels) for different counts
 // These are relative to the hero's center
 function getPetalOffsets(count) {
-  const RADIUS = 24; // Distance from hero center
+  const RADIUS = 22; // Distance from hero center
   
   switch (count) {
     case 2:
@@ -396,7 +396,6 @@ async function uploadPhotoAsync(localUri, userId) {
     const filePath = `${userId || 'anon'}/${Date.now()}.${ext}`;
 
     // For React Native, we need to use FormData or read as ArrayBuffer
-    // Option 1: Using fetch with ArrayBuffer (works in RN)
     const response = await fetch(localUri);
     const arrayBuffer = await response.arrayBuffer();
     const fileData = new Uint8Array(arrayBuffer);
@@ -426,6 +425,48 @@ async function uploadPhotoAsync(localUri, userId) {
     console.error('[uploadPhotoAsync] unexpected error:', e);
     return null;
   }
+}
+
+
+// Marker occlusion defaults
+const UPGRADE_ZOOM = 15.0;                 // where posts switch to JSX
+const COLLISION_THRESHOLD_PX = 12;         // screen-space collision radius
+const LIVE_NUDGE_OFFSET = { x: 16, y: -8 };// right + up
+const POST_SCALE_NEAR_THRESHOLD = 0.92;    // slight shrink near threshold
+const LIVE_ZINDEX = 100;                   // live > posts
+const POST_ZINDEX = 50;                    // posts < live
+
+// Add near the top of map.jsx with other helper functions
+function screenDistancePx(coord1, coord2, zoom, refLat) {
+  const mpp = metersPerPixel(zoom, refLat);
+  const meters = distanceInMeters(coord1.lat, coord1.lng, coord2.lat, coord2.lng);
+  return meters / mpp;
+}
+
+function detectCollisions(upgradedSpots, liveGroups, zoom, thresholdPx = 12) {
+  const collisions = new Map(); // liveGroupIndex -> { spot, offsetX, offsetY }
+  
+  liveGroups.forEach((liveGroup, liveIdx) => {
+    upgradedSpots.forEach(spot => {
+      const distPx = screenDistancePx(
+        { lat: liveGroup.lat, lng: liveGroup.lng },
+        { lat: spot.lat, lng: spot.lng },
+        zoom,
+        liveGroup.lat
+      );
+      
+      if (distPx < thresholdPx) {
+        // Collision detected - nudge live ring 16px right + 8px up
+        collisions.set(liveIdx, { 
+          spot, 
+          offsetX: 16, 
+          offsetY: -8 
+        });
+      }
+    });
+  });
+  
+  return collisions;
 }
 
 
@@ -778,7 +819,7 @@ const spriteFilter = useMemo(() => {
 }, [upgradeIds]);
 
 
-// Build upgraded posts → stack same-spot pins into "spots"
+// Build upgraded posts into stack same-spot pins into "spots"
 const upgradedPosts = useMemo(
   () => (upgradeIds || [])
     .map(uid => posts.find(p => String(p.id) === String(uid)))
@@ -799,6 +840,11 @@ const flowerSpots = useMemo(() => {
   }));
 }, [upgradedSpots, cameraInfo?.zoom]);
 
+// Calculate collisions before rendering
+const liveCollisions = useMemo(
+  () => detectCollisions(upgradedSpots, liveGroups, cameraInfo?.zoom ?? 14, 12),
+  [upgradedSpots, liveGroups, cameraInfo?.zoom]
+);
 
   // Memoized GeoJSON for posts -> Mapbox ShapeSource
 const postsGeoJSON = useMemo(() => {
@@ -1371,7 +1417,7 @@ const postsGeoJSON = useMemo(() => {
         ],
         iconAnchor: 'bottom',
         iconPitchAlignment: 'viewport',
-        iconAllowOverlap: false,
+        iconAllowOverlap: true,
         iconIgnorePlacement: false,
         symbolSortKey: ['get', 'priority'],
       }}
@@ -1399,106 +1445,116 @@ const postsGeoJSON = useMemo(() => {
       </MapboxGL.ShapeSource>
 
       {/* Upgrade layer: singles → PinMarker, stacks → SpotMarker with petals */}
-{flowerSpots.map((spot, idx) => {
-  const { lng, lat, posts: bucket, hero, count } = spot;
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+      {flowerSpots.map((spot, idx) => {
+      const { lng, lat, posts: bucket, hero, count } = spot;
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
 
-  const tint = categoryTint(hero.category || 'event');
-  const minsLeft = minutesLeftForPost(hero, 240);
-  const totalMins = totalMinutesForPost(hero, 240);
+      const tint = categoryTint(hero.category || 'event');
+      const minsLeft = minutesLeftForPost(hero, 240);
+      const totalMins = totalMinutesForPost(hero, 240);
 
-  // Selected if any post in the bucket is selected
-  const isSelected = !!(selectedPost && bucket.some(p => String(p.id) === String(selectedPost.id)));
+      // Selected if any post in the bucket is selected
+      const isSelected = !!(selectedPost && bucket.some(p => String(p.id) === String(selectedPost.id)));
 
-  const onPress = () => {
-    console.log('[Spot Tap] count:', count, 'bucket:', bucket.length);
-    if (count === 1) {
-      // Single post behavior
-      if (selectedPost && String(selectedPost.id) === String(hero.id)) {
-        setSheetOpen(true);
-      } else {
-        setSelectedPost(hero);
-        setSheetOpen(false);
-      }
-    } else {
-      // Multi-post: open cluster sheet
-      console.log('[Spot Tap] Opening SpotFeedSheet with', bucket.length, 'posts');
-      setSelectedCluster(bucket);
-      setSheetOpen(false);
-    }
-  };
-  
+      const onPress = () => {
+        console.log('[Spot Tap] count:', count, 'bucket:', bucket.length);
+        if (count === 1) {
+          if (selectedPost && String(selectedPost.id) === String(hero.id)) {
+            setSheetOpen(true);
+          } else {
+            setSelectedPost(hero);
+            setSheetOpen(false);
+          }
+        } else {
+          setSelectedCluster(bucket);
+          setSheetOpen(false);
+        }
+      };
 
-  // Get petals (exclude hero)
-  const petals = count > 1 
-    ? bucket
-        .filter(p => String(p.id) !== String(hero.id))
-        .slice(0, 5) // Max 5 petals
-    : [];
+      // Get petals (exclude hero)
+      const petals = count > 1
+        ? bucket.filter(p => String(p.id) !== String(hero.id)).slice(0, 5)
+        : [];
+      const petalOffsets = petals.length > 0 ? getPetalOffsets(petals.length) : [];
 
-  const petalOffsets = petals.length > 0 ? getPetalOffsets(petals.length) : [];
+      // NEW: scale slightly just above upgrade threshold
+      const zoom = cameraInfo?.zoom ?? 14;
+      const scaleDown = (zoom >= UPGRADE_ZOOM && zoom < UPGRADE_ZOOM + 0.5) ? POST_SCALE_NEAR_THRESHOLD : 1;
 
-  return (
-    <MapboxGL.MarkerView
-      key={`spot-${idx}-${hero.id}`}
-      id={`spot-${idx}-${hero.id}`}
-      coordinate={[lng, lat]}
-      anchor={{ x: 0.5, y: 1 }}
-    >
-      {/* Container for flower layout */}
-      <View style={{ position: 'relative', alignItems: 'center' }}>
-        {/* Render petals behind hero */}
-        {petals.map((petal, pIdx) => {
-          const offset = petalOffsets[pIdx] || { x: 0, y: 0 };
-          return (
-            <PetalMarker
-              key={`petal-${petal.id}`}
-              size={30} // Smaller than hero (which is 80)
-              avatarUrl={petal.avatar_url}
-              photoUrl={petal.photo_url}
-              tint={tint}
-              offsetX={offset.x}
-              offsetY={offset.y}
-            />
-          );
-        })}
+      return (
+        <MapboxGL.MarkerView
+          key={`spot-${idx}-${hero.id}`}
+          id={`spot-${idx}-${hero.id}`}
+          coordinate={[lng, lat]}
+          anchor={{ x: 0.5, y: 1 }}
+          allowOverlap={true}
+        >
+          {/* Container for flower layout */}
+          <View
+            style={{
+              position: 'relative',
+              alignItems: 'center',
+              zIndex: POST_ZINDEX,                // NEW: ensure posts below live rings
+              transform: [{ scale: scaleDown }],  // NEW: subtle shrink near threshold
+            }}
+          >
+            {/* Render petals behind hero (do not capture touches) */}
+            {petals.map((petal, pIdx) => {
+              const offset = petalOffsets[pIdx] || { x: 0, y: 0 };
+              return (
+                <View
+                  key={`petal-${petal.id}`}
+                  pointerEvents="none"             // NEW: prevent petals from stealing taps
+                  style={{ position: 'absolute' }}
+                >
+                  <PetalMarker
+                    size={30}
+                    avatarUrl={petal.avatar_url}
+                    photoUrl={petal.photo_url}
+                    tint={tint}
+                    offsetX={offset.x}
+                    offsetY={offset.y}
+                  />
+                </View>
+              );
+            })}
 
-        {/* Hero pin (on top, tappable) */}
-        {count === 1 ? (
-          <PinMarker
-            post={hero}
-            tint={tint}
-            avatarUrl={hero.avatar_url}
-            text={hero.text}
-            photoUrl={hero.photo_url}
-            minutesLeft={minsLeft}
-            totalMinutes={totalMins}
-            selected={isSelected}
-            onPress={onPress}
-            createdAt={hero.created_at}
-          />
-        ) : (
-          <SpotMarker
-            tint={tint}
-            avatarUrl={hero.avatar_url}
-            minutesLeft={minsLeft}
-            totalMinutes={totalMins}
-            selected={isSelected}
-            count={count}
-            onPress={onPress}
-          />
-        )}
-      </View>
-    </MapboxGL.MarkerView>
-  );
-})}
+            {/* Hero pin (on top, tappable) */}
+            {count === 1 ? (
+              <PinMarker
+                post={hero}
+                tint={tint}
+                avatarUrl={hero.avatar_url}
+                text={hero.text}
+                photoUrl={hero.photo_url}
+                minutesLeft={minsLeft}
+                totalMinutes={totalMins}
+                selected={isSelected}
+                onPress={onPress}
+                createdAt={hero.created_at}
+              />
+            ) : (
+              <SpotMarker
+                tint={tint}
+                avatarUrl={hero.avatar_url}
+                minutesLeft={minsLeft}
+                totalMinutes={totalMins}
+                selected={isSelected}
+                count={count}
+                onPress={onPress}
+              />
+            )}
+          </View>
+        </MapboxGL.MarkerView>
+      );
+    })}
 
-        {/* [LIVELOC] render grouped live users with petals + +N badge */}
-        {liveGroups.map((g, idx) => {
+        {/* [LIVELOC] render grouped live users with petals + +N badge (collision-aware) */}
+        {(liveGroups || []).map((g, idx) => {
           const members = g.members || [];
           if (!members.length) return null;
 
-          // Centroid (you already compute animated positions above)
+          // Centroid using animated positions
           const coords = members.map(u => {
             const pos = animatedPositions.get(u.user_id);
             return {
@@ -1513,7 +1569,7 @@ const postsGeoJSON = useMemo(() => {
           const lat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
           const lng = coords.reduce((s, p) => s + p.lng, 0) / coords.length;
 
-          // Ring color via youngest member
+          // Age bucket → ring color
           const youngest = youngestMinutes(coords);
           const { bucket } = classifyAge(youngest);
           if (bucket === 'hide') return null;
@@ -1521,9 +1577,23 @@ const postsGeoJSON = useMemo(() => {
 
           const count = coords.length;
           const zoom = cameraInfo?.zoom ?? 0;
-          const countOnly = zoom < LIVE_COUNT_ONLY_ZOOM; // always allow petals when sufficiently zoomed
+          const countOnly = zoom < LIVE_COUNT_ONLY_ZOOM;
 
-          // Count bubble at low zoom or very dense groups
+          // 🔸 Collision offset (only when not count-only)
+          const col = liveCollisions.get(idx);
+          let finalLng = lng;
+          let finalLat = lat;
+          if (col && !countOnly) {
+            const [olng, olat] = offsetCoordByPixels(
+              { lng, lat },
+              col.offsetX,
+              col.offsetY,
+              zoom
+            );
+            finalLng = olng;
+            finalLat = olat;
+          }
+
           if (countOnly) {
             return (
               <MapboxGL.MarkerView
@@ -1531,20 +1601,21 @@ const postsGeoJSON = useMemo(() => {
                 id={`livegrp-${idx}`}
                 coordinate={[lng, lat]}
                 anchor={{ x: 0.5, y: 0.5 }}
+                allowOverlap={true}
               >
-                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                <View style={{ alignItems: 'center', justifyContent: 'center', zIndex: LIVE_ZINDEX }}>
                   <LiveClusterMarker ringColor={ringColor} count={count} size={36} />
                 </View>
               </MapboxGL.MarkerView>
             );
           }
 
-          // Zoomed-in “flower” (1+)
+          // Zoomed-in “flower”
           const sorted = sortByRecency(coords);
           const hero = sorted[0];
-          const petals = sorted.slice(1, LIVE_PETAL_MAX + 1); // up to 5 petals
-          const extra = Math.max(0, count - (1 + petals.length)); // remaining (for +N badge)
-          const petalOffsets = getPetalOffsets(petals.length);     // your existing helper
+          const petals = sorted.slice(1, LIVE_PETAL_MAX + 1);
+          const extra = Math.max(0, count - (1 + petals.length));
+          const petalOffsets = getPetalOffsets(petals.length);
 
           const onPressCluster = () => {
             setLiveClusterSheet({ lat, lng, members: coords });
@@ -1554,20 +1625,18 @@ const postsGeoJSON = useMemo(() => {
             <MapboxGL.MarkerView
               key={`livegrp-${idx}`}
               id={`livegrp-${idx}`}
-              coordinate={[lng, lat]}
+              coordinate={[finalLng, finalLat]}  // ⬅️ use offset coords
+              allowOverlap={true}
               anchor={{ x: 0.5, y: 0.5 }}
             >
-              <View style={{ position: 'relative', alignItems: 'center', justifyContent: 'center' }}>
-                {/* Petals (render whenever not in count-only mode) */}
-                {!countOnly && petals.map((m, i) => {
+              <View style={{ position: 'relative', alignItems: 'center', justifyContent: 'center', zIndex: LIVE_ZINDEX }}>
+                {/* Petals must not capture touches */}
+                {petals.map((m, i) => {
                   const off = petalOffsets[i] || { x: 0, y: 0 };
                   return (
                     <View
                       key={`petal-${m.user_id}`}
-                      style={{
-                        position: 'absolute',
-                        transform: [{ translateX: off.x }, { translateY: off.y }],
-                      }}
+                      style={{ position: 'absolute', transform: [{ translateX: off.x }, { translateY: off.y }] }}
                       pointerEvents="none"
                     >
                       <LiveRingMarker size={28} ringColor={ringColor} avatarUrl={m.avatar_url} />
@@ -1580,13 +1649,11 @@ const postsGeoJSON = useMemo(() => {
                   <View /* tap target */>
                     <View style={{ alignItems: 'center' }}>
                       <LiveRingMarker size={34} ringColor={ringColor} avatarUrl={hero?.avatar_url} />
-                      {/* Invisible overlay button */}
                       <View
                         style={{ position: 'absolute', top: -8, bottom: -8, left: -8, right: -8 }}
                         onStartShouldSetResponder={() => true}
                         onResponderRelease={onPressCluster}
                       />
-                      {/* +N badge as centered overlay */}
                       {extra > 0 && (
                         <View
                           style={{
