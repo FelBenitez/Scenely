@@ -106,143 +106,109 @@ export default function PinMarker({
   const TEXT_MAX_W = 120;       // cap text width so it wraps to 2 lines
   const LEADING_SPACER = 12;    // pushes text further right inside the bubble (keeps text from hiding under the pin)
 
-  // Make the MarkerView wider for click area BUT keep the pin centered on the map coordinate
-  const TOTAL_W = size + CALLOUT_MAX_W + 24; // full interactive width (pin + callout + padding)
-  const HALF_W = TOTAL_W / 2;                // parent center used to keep the pin centered
-
   return (
-    <Animated.View style={{ opacity, transform: [{ scale }] }}>
+  <Animated.View style={{ opacity, transform: [{ scale }] }}>
+    {/* Root container sized to the PIN ONLY */}
+    <View style={{ width: size, height: totalHeight, position: 'relative', alignItems: 'center' }}>
+      
+      {/*CALLOUT is PASSIVE + absolutely positioned so it does NOT enlarge hitbox */}
+      {!!text && (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            left: size / 2 + CALLOUT_OFFSET_X,
+            top: cy + CALLOUT_OFFSET_Y,
+            zIndex: -1
+          }}
+        >
+          <View
+            style={[
+              styles.calloutBubble,
+              { backgroundColor: tint, maxWidth: CALLOUT_MAX_W, paddingLeft: LEADING_SPACER + 12 }
+            ]}
+          >
+            {!!photoUrl && (
+              <View style={styles.thumbWrap}>
+                <View style={[styles.thumb, { backgroundColor: '#ddd' }]}>
+                  <Animated.Image
+                    source={{ uri: photoUrl }}
+                    style={styles.thumbImg}
+                    resizeMode="cover"
+                  />
+                </View>
+              </View>
+            )}
+            <Text
+              style={[styles.calloutText, { maxWidth: TEXT_MAX_W }]}
+              numberOfLines={2}
+              ellipsizeMode="tail"
+            >
+              {text}
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* PIN is the ONLY interactive thing */}
       <TouchableOpacity
         activeOpacity={0.85}
         onPress={onPress}
-        style={[
-          styles.touchable,
-          { width: TOTAL_W, height: totalHeight }
-        ]}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}   // optional buffer
+        style={{ position: 'absolute', left: 0, top: 0 }}
       >
-        <View
-          style={{
-            width: TOTAL_W,
-            height: totalHeight,
-            position: 'relative',
-            overflow: 'visible',
-            shadowColor: '#000',
-            shadowOpacity: 0.15,
-            shadowRadius: 6,
-            shadowOffset: { width: 0, height: 2 },
-            elevation: 3,
-          }}
+        <Svg
+          width={size}
+          height={totalHeight}
+          viewBox={`0 0 ${size} ${totalHeight}`}
+          style={{ position: 'absolute', left: 0, top: 0, zIndex: 2 }}
         >
-          {!!text && (
-            <Animated.View
-              style={[
-                styles.calloutWrap,
-                {
-                  left: HALF_W + CALLOUT_OFFSET_X,   // anchor callout from parent center so pin stays centered
-                  top: cy + CALLOUT_OFFSET_Y,
-                },
-              ]}
-            >
-              <View
-                style={[
-                  styles.calloutBubble,
-                  { backgroundColor: tint, maxWidth: CALLOUT_MAX_W, paddingLeft: 12 + LEADING_SPACER }
-                ]}
-              >
-                {!!photoUrl && (
-                  <View style={styles.thumbWrap}>
-                    <View style={[styles.thumb, { backgroundColor: '#ddd' }]}>
-                      <Animated.Image
-                        source={{ uri: photoUrl }}
-                        style={styles.thumbImg}
-                        resizeMode="cover"
-                      />
-                    </View>
-                  </View>
-                )}
-                <Text
-                  style={[
-                    styles.calloutText,
-                    { maxWidth: TEXT_MAX_W, flexShrink: 1, flexGrow: 0 }
-                  ]}
-                  numberOfLines={2}
-                  ellipsizeMode="tail"
-                >
-                  {text}
-                </Text>
-              </View>
-            </Animated.View>
+          <Defs>
+            <ClipPath id="avatarClip">
+              <Circle cx={cx} cy={cy} r={rAvatar} />
+            </ClipPath>
+          </Defs>
+
+          {/* Tail + head */}
+          <Path d={tailPath} fill={tint} stroke={tint} strokeWidth={1.5} />
+          <Circle cx={cx} cy={cy} r={radius - ringWidth - 9} fill={tint} />
+
+          {/* Progress ring */}
+          <Circle
+            cx={cx} cy={cy} r={rProg}
+            stroke="#FFFFFF" strokeWidth={ringThickness}
+            fill="none" transform={`rotate(-90 ${cx} ${cy})`}
+          />
+          <Circle
+            cx={cx} cy={cy} r={rProg}
+            stroke={tint} strokeWidth={ringThickness} strokeLinecap="butt"
+            fill="none" strokeDasharray={`${C * (1 - progress)} ${C}`}
+            transform={`rotate(-90 ${cx} ${cy})`}
+          />
+
+          {/* Avatar */}
+          {avatarUrl ? (
+            <>
+              <G clipPath="url(#avatarClip)">
+                <SvgImage
+                  x={cx - rAvatar}
+                  y={cy - rAvatar}
+                  width={rAvatar * 2}
+                  height={rAvatar * 2}
+                  preserveAspectRatio="xMidYMid slice"
+                  href={{ uri: avatarUrl }}
+                />
+              </G>
+            </>
+          ) : (
+            <Circle cx={cx} cy={cy} r={rAvatar} fill="#D1D5DB" />
           )}
-          <Svg
-            width={size}
-            height={totalHeight}
-            viewBox={`0 0 ${size} ${totalHeight}`}
-            style={{ position: 'absolute', left: HALF_W - (size / 2), top: 0, zIndex: 2 }}
-          >
-            <Defs>
-              <ClipPath id="avatarClip">
-                <Circle cx={cx} cy={cy} r={rAvatar} />
-              </ClipPath>
-            </Defs>
-
-            {/* Tail only (drawn first). The circle head + rings are drawn after. */}
-            <Path d={tailPath} fill={tint} stroke={tint} strokeWidth={1.5} />
-
-            {/* Outer circle (same exact size as before) */}
-            <Circle cx={cx} cy={cy} r={radius - ringWidth - 9} fill={tint} />
-
-            {/* Progress ring: full white base + purple elapsed cover (so white looks like remaining) */}
-            {/* Base remaining ring (white, full circle) */}
-            <Circle
-              cx={cx}
-              cy={cy}
-              r={rProg}
-              stroke="#FFFFFF"
-              strokeWidth={ringThickness}
-              fill="none"
-              transform={`rotate(-90 ${cx} ${cy})`}
-            />
-            {/* Elapsed cover (purple) grows clockwise from 12 o'clock and hides the white */}
-            <Circle
-              cx={cx}
-              cy={cy}
-              r={rProg}
-              stroke={tint}
-              strokeWidth={ringThickness}
-              strokeLinecap="butt"
-              fill="none"
-              strokeDasharray={`${C * (1 - progress)} ${C}`}
-              transform={`rotate(-90 ${cx} ${cy})`}
-            />
-
-            {/* //Gray inner circle slot
-            <Circle cx={cx} cy={cy} r={radius - ringWidth - 16.5} fill="#D1D5DB" /> */}
-            {/* Avatar or gray fallback (image clipped to the exact inner gray circle) */}
-            {avatarUrl ? (
-              <>
-                <G clipPath="url(#avatarClip)">
-                  <SvgImage
-                    x={cx - rAvatar}
-                    y={cy - rAvatar}
-                    width={rAvatar * 2}
-                    height={rAvatar * 2}
-                    preserveAspectRatio="xMidYMid slice"
-                    href={{ uri: avatarUrl }}
-                  />
-                </G>
-                {/* Optional: a clean ring on top of the avatar for separation */}
-                {/* <Circle cx={cx} cy={cy} r={rAvatar} stroke="rgba(255,255,255,0.9)" strokeWidth={1.2} fill="none" /> */}
-              </>
-            ) : (
-              <Circle cx={cx} cy={cy} r={rAvatar} fill="#D1D5DB" />
-            )}
-
-          </Svg>
-
-        </View>
+        </Svg>
       </TouchableOpacity>
-    </Animated.View>
-  );
+
+    </View>
+  </Animated.View>
+);
 }
 
 const styles = StyleSheet.create({

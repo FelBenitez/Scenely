@@ -1,7 +1,5 @@
 // components/ui/PetalMarker.jsx
-import React from 'react';
-import { View, StyleSheet } from 'react-native';
-import { Image } from 'react-native';
+import { Image, StyleSheet, View } from 'react-native';
 
 
 export default function PetalMarker({
@@ -16,6 +14,7 @@ export default function PetalMarker({
 
   return (
     <View
+      pointerEvents="none" // so it's not clickable and gets in the way of collisions
       style={[
         styles.petal,
         {
@@ -46,7 +45,7 @@ const styles = StyleSheet.create({
     top: '50%',
     left: '50%',
     marginLeft: -16, // half of default size (32/2)
-    marginTop: 36,
+    marginTop: 84,
     borderWidth: 2,
     overflow: 'hidden',
     opacity: 0.75,
