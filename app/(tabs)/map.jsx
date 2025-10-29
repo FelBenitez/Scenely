@@ -2,7 +2,7 @@
 import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Alert, AppState, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PostSheet from '../../components/PostSheet';
@@ -24,6 +24,7 @@ import { groupLiveUsers } from '../../utils/liveGroups';
 import { LIVE_GROUP_RADIUS_M, RING_BY_BUCKET } from '../../constants/map';
 import LiveRingMarker from '../../components/ui/LiveRingMarker';
 import LiveClusterSheet from '../../components/LiveClusterSheet';
+import { scorePost } from '../../utils/ranking';
 
 
 // Sprite(s) for post pins
@@ -429,7 +430,7 @@ async function uploadPhotoAsync(localUri, userId) {
 
 
 // Marker occlusion defaults
-const UPGRADE_ZOOM = 15.0;                 // where posts switch to JSX
+//const UPGRADE_ZOOM = 15.0;                 // where posts switch to JSX
 const COLLISION_THRESHOLD_PX = 12;         // screen-space collision radius
 const LIVE_NUDGE_OFFSET = { x: 16, y: -8 };// right + up
 const POST_SCALE_NEAR_THRESHOLD = 0.92;    // slight shrink near threshold
@@ -482,6 +483,7 @@ export default function MapTab() {
   const [selectedPost, setSelectedPost] = useState(null);
   const lastPostTime = useRef(0);
   const MAX_ONLINE_MIN = 10;
+  const [styleLoaded, setStyleLoaded] = useState(false);
 
   // Live location
   const [shareLive, setShareLive] = useState(true); // toggle to share/halt heartbeat
@@ -529,11 +531,13 @@ export default function MapTab() {
 
 
   // threshold at which GPU -> React upgrade kicks in
-  const UPGRADE_ZOOM = designMode ? 0 : 15;
+  //const UPGRADE_ZOOM = designMode ? 0 : 15;
 
   // DEV: live-design mode (force upgrades everywhere)
   const [designMode, setDesignMode] = useState(false);
 
+  // Single source of truth for the upgrade threshold
+  const upgradeZoom = designMode ? 0 : 15;
 
   // Live cluster display thresholds
   const LIVE_COUNT_ONLY_ZOOM = 15;   // below this -> count bubble
@@ -549,15 +553,26 @@ export default function MapTab() {
     return () => clearInterval(id);
   }, []);
 
+  const lastCamUpdateRef = useRef(0);
+  const onCameraChangedThrottled = useCallback((e) => {
+  const now = Date.now();
+  if (now - lastCamUpdateRef.current < 180) return; // ~5–6 fps while panning
+  lastCamUpdateRef.current = now;
+  const { zoom, center } = e?.properties ?? {};
+  if (Array.isArray(center) && typeof zoom === 'number') {
+    setCameraInfo({ center, zoom });
+  }
+  }, []);
+
   // Ensure upgrades always reset when you zoom out; they'll reappear when you zoom back in
   useEffect(() => {
-    if (designMode) return; // <-- don't clear in design mode
+    if (designMode) return;
     const z = cameraInfo?.zoom;
-    if (typeof z === 'number' && z < UPGRADE_ZOOM) {
+    if (typeof z === 'number' && z < upgradeZoom) {
       setSelectedPost(null);
       setSheetOpen(false);
     }
-  }, [cameraInfo?.zoom, designMode]);
+  }, [cameraInfo?.zoom, designMode, upgradeZoom]);
 
 
   useEffect(() => {
@@ -598,29 +613,6 @@ export default function MapTab() {
    try { router.setParams({ lat: undefined, lng: undefined, zoom: undefined, focusId: undefined }); } catch {}
  // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [params, posts]);
-
-
-  useEffect(() => {
-  let channel;
-
-  const handler = async (payload) => {
-    console.log('[RT posts] change:', payload?.eventType, payload?.new?.id);
-  };
-
-  channel = supabase
-    .channel('realtime:public:posts') // name can be anything
-    .on('postgres_changes',
-      { event: '*', schema: 'public', table: 'posts' },
-      handler
-    )
-    .subscribe((status) => {
-      console.log('[RT posts] status:', status); // 'SUBSCRIBED' is what you want
-    });
-
-  return () => {
-    supabase.removeChannel(channel).catch(()=>{});
-  };
-}, []);
 
 
   // live device location subscription (cheap + accurate)
@@ -783,12 +775,11 @@ const upgradeIds = useMemo(() => {
   if (!center || typeof zoom !== 'number') return [];
 
   // Only gate by zoom when NOT in design mode
-  if (!designMode && zoom < UPGRADE_ZOOM) return [];
+  if (!designMode && zoom < upgradeZoom) return [];
 
   const centerLng = center[0];
   const centerLat = center[1];
 
-  // Wider net in design mode (no 600m cutoff, and larger cap)
   const maxDistMeters = designMode ? Infinity : 600;
   const cap = designMode ? 20 : 8;
 
@@ -796,26 +787,53 @@ const upgradeIds = useMemo(() => {
     .filter(p => Number.isFinite(p?.lat) && Number.isFinite(p?.lng))
     .map(p => {
       const dist = distanceInMeters(p.lat, p.lng, centerLat, centerLng);
-      const pr = computePriority(p, { latitude: centerLat, longitude: centerLng });
-      return { id: String(p.id), post: p, dist, pr };
+      // distance-aware score: global score + local proximity boost
+      const base = scorePost(p);
+      const prox = Math.max(0, 1_000 - dist); // simple ~1km bell
+      return { id: String(p.id), post: p, dist, score: base + prox * 0.8 };
     })
     .filter(x => x.dist <= maxDistMeters);
 
-  scored.sort((a, b) => (b.pr !== a.pr ? b.pr - a.pr : a.dist - b.dist));
+  scored.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.dist - b.dist));
 
   const top = scored.slice(0, cap).map(x => x.id);
+
+  // always include selected if present
   if (selectedPost?.id && !top.includes(String(selectedPost.id))) {
     top.unshift(String(selectedPost.id));
   }
   return top;
-}, [posts, cameraInfo, selectedPost, designMode, UPGRADE_ZOOM]);
+}, [posts, cameraInfo, selectedPost, designMode, upgradeZoom]);
 
-// Hide upgraded ids from the GPU sprite layer
+// Set of upgraded IDs for fast lookup
+const upgradedIdSet = useMemo(() => new Set((upgradeIds || []).map(String)), [upgradeIds]);
+
+
+// Hide upgraded ids from GPU layers - provide filter parts only
+// Complete filter for both layers
 const spriteFilter = useMemo(() => {
-  const base = ['!', ['has', 'point_count']]; // only real features
-  if (!upgradeIds || upgradeIds.length === 0) return base;
-  // hide any features whose id is in upgradeIds
-  return ['all', base, ['!', ['in', ['get', 'id'], ['literal', upgradeIds]]]];
+  const conditions = [
+    ['!', ['has', 'point_count']], // only real features (not clusters)
+  ];
+  
+  if (upgradeIds?.length) {
+    conditions.push(['!', ['in', ['get', 'id'], ['literal', upgradeIds]]]);
+  }
+  
+  return ['all', ...conditions];
+}, [upgradeIds]);
+
+// Filter for the expiring-minute labels (build a flat, complete array)
+const expiringLabelFilter = useMemo(() => {
+  const conditions = [
+    ['!', ['has', 'point_count']],
+  ];
+  if (upgradeIds?.length) {
+    conditions.push(['!', ['in', ['get', 'id'], ['literal', upgradeIds]]]);
+  }
+  conditions.push(['<=', ['get', 'minutesLeft'], 30]);
+  conditions.push(['>',  ['get', 'minutesLeft'], 0]);
+  return ['all', ...conditions];
 }, [upgradeIds]);
 
 
@@ -846,7 +864,7 @@ const liveCollisions = useMemo(
   [upgradedSpots, liveGroups, cameraInfo?.zoom]
 );
 
-  // Memoized GeoJSON for posts -> Mapbox ShapeSource
+// Memoized GeoJSON for posts -> Mapbox ShapeSource
 const postsGeoJSON = useMemo(() => {
   const center = userLoc ?? { latitude: 30.2849, longitude: -97.7341 };
   return {
@@ -862,13 +880,14 @@ const postsGeoJSON = useMemo(() => {
             id: String(p.id),
             category: p.category || 'event',
             minutesLeft,
-            freshBucket: getFreshBucket(minutesLeft), // for sprite variant later
-            priority: computePriority(p, center),
+            freshBucket: getFreshBucket(minutesLeft),     // 0,25,50,75,100
+            priority: scorePost(p),                       // stable global rank for sort
+            isUpgraded: upgradedIdSet.has(String(p.id)),
           },
         };
       }),
   };
-}, [posts, userLoc]);
+}, [posts, userLoc, minuteTick, upgradedIdSet]);
 
 
 
@@ -1339,13 +1358,11 @@ const postsGeoJSON = useMemo(() => {
       <MapboxGL.MapView
         style={StyleSheet.absoluteFillObject}
         styleURL={MapboxGL.StyleURL.Street}
+          onMapLoadingError={e => console.log('onDidFailLoadingMap', e?.nativeEvent)}
+        onMapError={e => console.log('onMapError', e?.nativeEvent)}
         scaleBarEnabled={false}
-        onCameraChanged={(e) => {
-          const { zoom, center } = e?.properties ?? {};
-          if (Array.isArray(center) && typeof zoom === 'number') {
-            setCameraInfo({ center, zoom });
-          }
-        }}
+        onDidFinishLoadingStyle={() => setStyleLoaded(true)}
+        onCameraChanged={onCameraChangedThrottled}
         onPress={() => { setSelectedPost(null); setSheetOpen(false); }}
       >
         <MapboxGL.Camera
@@ -1370,79 +1387,81 @@ const postsGeoJSON = useMemo(() => {
 
 
 
-        {/* REGISTER PIN SPRITES ONCE */}
-        <MapboxGL.Images
-          images={{
-            // temp: one key points to one sprite file
-            pin_event_100: PIN_EVENT_100, // key used by SymbolLayer
-          }}
-        />
 
+        {styleLoaded && (
+          <>
+            {/* REGISTER PIN SPRITES ONCE */}
+            <MapboxGL.Images
+              images={{
+                // temp: one key points to one sprite file
+                pin_event_100: PIN_EVENT_100, // key used by SymbolLayer
+              }}
+            />
 
-        {/* POSTS via GPU layers (fast) */}
-      <MapboxGL.ShapeSource
-        id="posts-src"
-        shape={postsGeoJSON}
-        // start with no clustering; we’ll add later once sprites are in
-        cluster={false}
-    
-        onPress={(e) => {
-        const f = e?.features?.[0];
-        if (!f) return;
-        const id = f.properties?.id;
-        const post = posts.find(p => String(p.id) === id);
-        if (!post) return;
+            {/* POSTS via GPU layers (fast) */}
+            <MapboxGL.ShapeSource
+              id="posts-src"
+              shape={postsGeoJSON}
+              // start with no clustering; we’ll add later once sprites are in
+              cluster={false}
+              onPress={(e) => {
+                const f = e?.features?.[0];
+                if (!f) return;
+                const id = f.properties?.id;
+                const post = posts.find(p => String(p.id) === id);
+                if (!post) return;
 
-        // First tap focuses (upgrades pin). Second tap opens sheet.
-        if (selectedPost && String(selectedPost.id) === String(post.id)) {
-          setSheetOpen(true); // second tap -> open sheet
-        } else {
-          setSelectedPost(post);   // focus/upgrade
-          setSheetOpen(false);     // don't open sheet yet
-        }
-}}
-      >
-        {/* TEARDROP SYMBOLS (using the one test sprite for all posts right now) */}
-      <MapboxGL.SymbolLayer
-      id="posts-symbols"
-      filter={spriteFilter}
-      style={{
-        iconImage: 'pin_event_100',
-        iconSize: [
-          'interpolate', ['linear'], ['zoom'],
-          12, 0.10,
-          14, 0.12,
-          16, 0.14,
-          18, 0.16,
-        ],
-        iconAnchor: 'bottom',
-        iconPitchAlignment: 'viewport',
-        iconAllowOverlap: true,
-        iconIgnorePlacement: false,
-        symbolSortKey: ['get', 'priority'],
-      }}
-    />
+                // First tap focuses (upgrades pin). Second tap opens sheet.
+                if (selectedPost && String(selectedPost.id) === String(post.id)) {
+                  setSheetOpen(true); // second tap -> open sheet
+                } else {
+                  setSelectedPost(post);   // focus/upgrade
+                  setSheetOpen(false);     // don't open sheet yet
+                }
+              }}
+            >
+              {/* TEARDROP SYMBOLS (using the one test sprite for all posts right now) */}
+              <MapboxGL.SymbolLayer
+                id="posts-symbols"
+                filter={spriteFilter}
+                style={{
+                  iconImage: [
+                    'coalesce',
+                    ['image', ['concat', 'pin_', ['get', 'category'], '_', ['to-string', ['get', 'freshBucket']]]],
+                    'pin_event_100',
+                  ],
+                  iconSize: [
+                    'interpolate', ['linear'], ['zoom'],
+                    12, 0.10,
+                    14, 0.12,
+                    16, 0.14,
+                    18, 0.16,
+                  ],
+                  iconAnchor: 'bottom',
+                  iconPitchAlignment: 'viewport',
+                  iconAllowOverlap: true,
+                  iconIgnorePlacement: true,
+                  symbolSortKey: ['get', 'priority'],
+                }}
+              />
 
-        {/* Tiny “Xm” label for expiring posts (<= 30 min) */}
-        <MapboxGL.SymbolLayer
-          id="posts-expiring-label"
-          filter={[
-            'all',
-            ['!', ['has', 'point_count']],
-            ['<=', ['get', 'minutesLeft'], 30],
-            ['>',  ['get', 'minutesLeft'], 0],
-          ]}
-          style={{
-            textField: ['concat', ['to-string', ['get', 'minutesLeft']], 'm'],
-            textSize: 11,
-            textColor: '#1A1A1A',
-            textHaloColor: '#FFFFFF',
-            textHaloWidth: 1.5,
-            textAllowOverlap: false,
-            textOffset: [0, -1.6], // nudge above the circle a bit
-          }}
-        />
-      </MapboxGL.ShapeSource>
+              {/* Tiny “Xm” label for expiring posts (<= 30 min) */}
+              <MapboxGL.SymbolLayer
+                id="posts-expiring-label"
+                filter={expiringLabelFilter}
+                style={{
+                  textField: ['concat', ['to-string', ['get', 'minutesLeft']], 'm'],
+                  textSize: 11,
+                  textColor: '#1A1A1A',
+                  textHaloColor: '#FFFFFF',
+                  textHaloWidth: 1.5,
+                  textAllowOverlap: false,
+                  textOffset: [0, -1.6], // nudge above the circle a bit
+                }}
+              />
+            </MapboxGL.ShapeSource>
+          </>
+        )}
 
       {/* Upgrade layer: singles → PinMarker, stacks → SpotMarker with petals */}
       {flowerSpots.map((spot, idx) => {
@@ -1479,7 +1498,7 @@ const postsGeoJSON = useMemo(() => {
 
       // NEW: scale slightly just above upgrade threshold
       const zoom = cameraInfo?.zoom ?? 14;
-      const scaleDown = (zoom >= UPGRADE_ZOOM && zoom < UPGRADE_ZOOM + 0.5) ? POST_SCALE_NEAR_THRESHOLD : 1;
+      const scaleDown = (zoom >= upgradeZoom && zoom < upgradeZoom + 0.5) ? POST_SCALE_NEAR_THRESHOLD : 1;
 
       return (
         <MapboxGL.MarkerView
@@ -1896,7 +1915,7 @@ const postsGeoJSON = useMemo(() => {
       <FAB visible={!composerOpen} onPress={() => setComposerOpen(true)} />
 
 
-        {/* Temporary test button */}
+        {/* Temporary test button
       <TouchableOpacity
         style={{
           position: 'absolute',
@@ -1913,7 +1932,7 @@ const postsGeoJSON = useMemo(() => {
         }}
       >
         <Text style={{ color: 'white', fontWeight: 'bold' }}>Test Sheet</Text>
-      </TouchableOpacity>
+      </TouchableOpacity> */}
 
     </View>
   );
