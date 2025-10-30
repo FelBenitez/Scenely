@@ -219,7 +219,7 @@ function buildSpotStacks(sourcePosts) {
   const groups = [];
   const visited = new Set();
 
-  // naive O(n^2) with tiny n (only upgraded posts) → fine
+  // naive O(n^2) with n ≤ ~400 (our max window) → fine
   for (let i = 0; i < sourcePosts.length; i++) {
     const a = sourcePosts[i];
     if (!a || visited.has(a.id)) continue;
@@ -725,129 +725,107 @@ export default function MapTab() {
   }, [liveUsers]);
 
 
-  // Group nearby live users into simple clusters
-  const liveGroups = useMemo(
-    () => groupLiveUsers(liveUsers, LIVE_GROUP_RADIUS_M),
-    [liveUsers]
-  );
+// Group nearby live users into simple clusters
+const liveGroups = useMemo(
+  () => groupLiveUsers(liveUsers, LIVE_GROUP_RADIUS_M),
+  [liveUsers]
+);
 
+// Build stacks for ALL posts (one spot ≈ one coordinate bucket)
+const allSpots = useMemo(() => {
+  const valid = (posts || []).filter(p => Number.isFinite(p?.lat) && Number.isFinite(p?.lng));
+  return buildSpotStacks(valid);
+}, [posts]);
 
-
-// Which posts should “upgrade” into React markers right now?
-// const upgradeIds = useMemo(() => {
-//   const { center, zoom } = cameraInfo;
-//   if (!center || typeof zoom !== 'number') return [];
-
-//   // Only upgrade when fairly zoomed in
-//   if (zoom < 15) return [];
-
-//   const centerLng = center[0];
-//   const centerLat = center[1];
-
-//   // score: priority first, then closeness to center; within ~600m
-//   const scored = (posts || [])
-//     .filter(p => Number.isFinite(p?.lat) && Number.isFinite(p?.lng))
-//     .map(p => {
-//       const dist = distanceInMeters(p.lat, p.lng, centerLat, centerLng);
-//       const pr = computePriority(p, { latitude: centerLat, longitude: centerLng });
-//       return { id: String(p.id), post: p, dist, pr };
-//     })
-//     .filter(x => x.dist <= 600);
-
-//   scored.sort((a, b) => {
-//     if (b.pr !== a.pr) return b.pr - a.pr;
-//     return a.dist - b.dist;
-//   });
-
-//   // keep it small for perf (6–10 is good)
-//   const top = scored.slice(0, 8).map(x => x.id);
-
-//   // always include the focused post if any
-//   if (selectedPost?.id && !top.includes(String(selectedPost.id))) {
-//     top.unshift(String(selectedPost.id));
-//   }
-//   return top;
-// }, [posts, cameraInfo, selectedPost]);
-
-// upgradeIDs with designing mode
-const upgradeIds = useMemo(() => {
+// Pick Top-N spots (not posts) based on hero score + proximity; always include selected
+const topSpots = useMemo(() => {
   const { center, zoom } = cameraInfo;
-  if (!center || typeof zoom !== 'number') return [];
+  if (!center || ( !designMode && zoom < upgradeZoom )) return [];
 
-  // Only gate by zoom when NOT in design mode
-  if (!designMode && zoom < upgradeZoom) return [];
-
-  const centerLng = center[0];
-  const centerLat = center[1];
-
+  const [centerLng, centerLat] = center;
   const maxDistMeters = designMode ? Infinity : 600;
   const cap = designMode ? 20 : 8;
 
-  const scored = (posts || [])
-    .filter(p => Number.isFinite(p?.lat) && Number.isFinite(p?.lng))
-    .map(p => {
-      const dist = distanceInMeters(p.lat, p.lng, centerLat, centerLng);
-      // distance-aware score: global score + local proximity boost
-      const base = scorePost(p);
-      const prox = Math.max(0, 1_000 - dist); // simple ~1km bell
-      return { id: String(p.id), post: p, dist, score: base + prox * 0.8 };
+  const scored = allSpots
+    .map(spot => {
+      const dist = distanceInMeters(spot.lat, spot.lng, centerLat, centerLng);
+      const base = scorePost(spot.hero);
+      const prox = Math.max(0, 1000 - dist); // ~1km bell
+      return { spot, dist, score: base + prox * 0.8 };
     })
-    .filter(x => x.dist <= maxDistMeters);
+    .filter(x => x.dist <= maxDistMeters)
+    .sort((a, b) => (b.score - a.score) || (a.dist - b.dist));
 
-  scored.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.dist - b.dist));
+  const picked = scored.slice(0, cap).map(x => x.spot);
 
-  const top = scored.slice(0, cap).map(x => x.id);
+  // Always include the spot containing the selected post, if any
+  const selSpot = selectedPost
+    ? allSpots.find(s => s.posts.some(p => String(p.id) === String(selectedPost.id)))
+    : null;
+  if (selSpot && !picked.includes(selSpot)) picked.unshift(selSpot);
 
-  // always include selected if present
-  if (selectedPost?.id && !top.includes(String(selectedPost.id))) {
-    top.unshift(String(selectedPost.id));
-  }
-  return top;
-}, [posts, cameraInfo, selectedPost, designMode, upgradeZoom]);
+  return picked;
+}, [allSpots, cameraInfo, selectedPost, designMode, upgradeZoom]);
 
-// Set of upgraded IDs for fast lookup
-const upgradedIdSet = useMemo(() => new Set((upgradeIds || []).map(String)), [upgradeIds]);
+// These are the JSX-upgraded spots you render with <PinMarker>/<SpotMarker>
+const upgradedSpots = topSpots;
 
-
-// Hide upgraded ids from GPU layers - provide filter parts only
-// Complete filter for both layers
-const spriteFilter = useMemo(() => {
-  const conditions = [
-    ['!', ['has', 'point_count']], // only real features (not clusters)
-  ];
-  
-  if (upgradeIds?.length) {
-    conditions.push(['!', ['in', ['get', 'id'], ['literal', upgradeIds]]]);
-  }
-  
-  return ['all', ...conditions];
-}, [upgradeIds]);
-
-// Filter for the expiring-minute labels (build a flat, complete array)
-const expiringLabelFilter = useMemo(() => {
-  const conditions = [
-    ['!', ['has', 'point_count']],
-  ];
-  if (upgradeIds?.length) {
-    conditions.push(['!', ['in', ['get', 'id'], ['literal', upgradeIds]]]);
-  }
-  conditions.push(['<=', ['get', 'minutesLeft'], 30]);
-  conditions.push(['>',  ['get', 'minutesLeft'], 0]);
-  return ['all', ...conditions];
-}, [upgradeIds]);
-
-
-// Build upgraded posts into stack same-spot pins into "spots"
-const upgradedPosts = useMemo(
-  () => (upgradeIds || [])
-    .map(uid => posts.find(p => String(p.id) === String(uid)))
-    .filter(Boolean),
-  [upgradeIds, posts]
+// Set of ALL post IDs that belong to any upgraded spot (hide them from GPU)
+const upgradedSpotMemberIdSet = useMemo(
+  () => new Set(upgradedSpots.flatMap(s => s.posts.map(p => String(p.id)))),
+  [upgradedSpots]
 );
-const upgradedSpots = useMemo(
-  () => buildSpotStacks(upgradedPosts),
-  [upgradedPosts]
+
+// Set of IDs allowed to render as GPU sprites: ALL posts from non-upgraded spots
+const allowedSpriteIds = useMemo(() => {
+  const keep = [];
+  for (const s of allSpots) {
+    const memberUpgraded = s.posts.some(p => upgradedSpotMemberIdSet.has(String(p.id)));
+    if (!memberUpgraded) {
+      // keep ALL posts from non-upgraded spots
+      for (const p of s.posts) keep.push(String(p.id));
+    }
+  }
+  return keep;
+}, [allSpots, upgradedSpotMemberIdSet]);
+
+
+
+// Detect when below the upgrade zoom (show all posts as sprites)
+const belowUpgradeZoom = useMemo(
+  () => (!designMode && (cameraInfo?.zoom ?? 0) < upgradeZoom),
+  [cameraInfo?.zoom, designMode, upgradeZoom]
 );
+
+// Complete filter for both layers:
+// Below upgrade zoom: show all posts as sprites; otherwise filter to allowedSpriteIds
+const spriteFilter = useMemo(() => (
+  belowUpgradeZoom
+    ? ['all', ['!', ['has', 'point_count']]]
+    : [
+        'all',
+        ['!', ['has', 'point_count']],
+        ['in', ['get', 'id'], ['literal', allowedSpriteIds]],
+      ]
+), [belowUpgradeZoom, allowedSpriteIds]);
+
+// Filter for the expiring-minute labels (show for everyone below upgrade zoom)
+const expiringLabelFilter = useMemo(() => (
+  belowUpgradeZoom
+    ? [
+        'all',
+        ['!', ['has', 'point_count']],
+        ['<=', ['get', 'minutesLeft'], 30],
+        ['>',  ['get', 'minutesLeft'], 0],
+      ]
+    : [
+        'all',
+        ['!', ['has', 'point_count']],
+        ['in', ['get', 'id'], ['literal', allowedSpriteIds]],
+        ['<=', ['get', 'minutesLeft'], 30],
+        ['>',  ['get', 'minutesLeft'], 0],
+      ]
+), [belowUpgradeZoom, allowedSpriteIds]);
 
 // Build petals per upgraded spot (screen-space offsets → nearby coords)
 const flowerSpots = useMemo(() => {
@@ -882,12 +860,12 @@ const postsGeoJSON = useMemo(() => {
             minutesLeft,
             freshBucket: getFreshBucket(minutesLeft),     // 0,25,50,75,100
             priority: scorePost(p),                       // stable global rank for sort
-            isUpgraded: upgradedIdSet.has(String(p.id)),
+            isUpgraded: upgradedSpotMemberIdSet.has(String(p.id)),
           },
         };
       }),
   };
-}, [posts, userLoc, minuteTick, upgradedIdSet]);
+}, [posts, userLoc, minuteTick, upgradedSpotMemberIdSet]);
 
 
 
@@ -1425,11 +1403,7 @@ const postsGeoJSON = useMemo(() => {
                 id="posts-symbols"
                 filter={spriteFilter}
                 style={{
-                  iconImage: [
-                    'coalesce',
-                    ['image', ['concat', 'pin_', ['get', 'category'], '_', ['to-string', ['get', 'freshBucket']]]],
-                    'pin_event_100',
-                  ],
+                  iconImage: 'pin_event_100',
                   iconSize: [
                     'interpolate', ['linear'], ['zoom'],
                     12, 0.10,
