@@ -113,6 +113,41 @@ function sortByRecency(members) {
   return members.slice().sort((a, b) => new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime());
 }
 
+// Global live visibility window (minutes)
+const MAX_LIVE_MIN = 45; // hide after 45 minutes
+
+// HOISTED: classify by age (minutes) — module scope for reuse in liveBucket & JSX
+function classifyAge(mins) {
+  if (mins <= 2) return { bucket: 'live', opacity: 1, label: 'Live' };
+  if (mins <= 10) return { bucket: 'warm', opacity: 0.9, label: `${Math.round(mins)}m` };
+  if (mins <= 30) return { bucket: 'cooling', opacity: 0.7, label: `${Math.round(mins)}m` };
+  if (mins <= MAX_LIVE_MIN) return { bucket: 'stale', opacity: 0.5, label: `~${Math.round(mins)}m` };
+  return { bucket: 'hide', opacity: 0, label: '' };
+}
+
+// ==== LIVE TOP-N CONFIG ====
+const LIVE_TOPN_CAP = 8;          // how many live groups (singles or clusters) to upgrade
+const LIVE_UPGRADE_ZOOM = 15;      // gate upgrades by zoom (designMode overrides)
+const LIVE_UPGRADE_RADIUS_M = 800; // only consider within ~0.8km
+
+// Bucket for live (reuse classifyAge so colors match your UI)
+function liveBucket(mins) {
+  return classifyAge(mins).bucket; // 'live' | 'warm' | 'cooling' | 'stale' | 'hide'
+}
+
+// Scoring for a live entity at (lat,lng) with minsAgo recency
+function scoreLiveEntity(minsAgo, lat, lng, centerLat, centerLng) {
+  const dist = distanceInMeters(lat, lng, centerLat, centerLng);
+  const proximity = Math.max(0, LIVE_UPGRADE_RADIUS_M - dist); // closer -> higher
+  const freshness = Math.max(0, MAX_LIVE_MIN - minsAgo) * 50;  // newer -> higher
+  return freshness * 2 + proximity;                             // simple, stable
+}
+
+// Stable key for a live group (so we can map groups ↔ members)
+function liveGroupKey(g) {
+  return (g?.members || []).map(m => String(m.user_id)).sort().join('|');
+}
+
 // Petal offset positions (in pixels) for different counts
 // These are relative to the hero's center
 function getPetalOffsets(count) {
@@ -501,7 +536,6 @@ export default function MapTab() {
   // config knobs
   const HEARTBEAT_MS = 20_000; // send position every 20s
   const POLL_MS = 20_000;      // refresh others every 20s
-  const MAX_LIVE_MIN = 45;     // hide after 45 minutes
   // Buckets: live<=2, warm<=10, cooling<=30, else stale<=45(hidden)
 
   // movement + timing control
@@ -867,16 +901,89 @@ const postsGeoJSON = useMemo(() => {
   };
 }, [posts, userLoc, minuteTick, upgradedSpotMemberIdSet]);
 
+// LIVE: Top-N group upgrades (groups = clusters; singles are groups of 1)
+const liveUpgradeGroupKeys = useMemo(() => {
+  const { center, zoom } = cameraInfo;
+  if (!center || typeof zoom !== 'number') return [];
 
+  // Only gate by zoom when NOT in design mode
+  if (!designMode && zoom < LIVE_UPGRADE_ZOOM) return [];
 
-  // helper: classify by age (minutes)
-  function classifyAge(mins) {
-    if (mins <= 2) return { bucket: 'live', opacity: 1, label: 'Live' };
-    if (mins <= 10) return { bucket: 'warm', opacity: 0.9, label: `${Math.round(mins)}m` };
-    if (mins <= 30) return { bucket: 'cooling', opacity: 0.7, label: `${Math.round(mins)}m` };
-    if (mins <= MAX_LIVE_MIN) return { bucket: 'stale', opacity: 0.5, label: `~${Math.round(mins)}m` };
-    return { bucket: 'hide', opacity: 0, label: '' };
+  const [centerLng, centerLat] = center;
+
+  // Build candidates from grouped live (use group centroid + youngest member recency)
+  const candidates = (liveGroups || [])
+    .map(g => {
+      const mins = youngestMinutes(g.members);
+      const s = scoreLiveEntity(mins, g.lat, g.lng, centerLat, centerLng);
+      const d = distanceInMeters(g.lat, g.lng, centerLat, centerLng);
+      return { key: liveGroupKey(g), group: g, score: s, dist: d };
+    })
+    .filter(x => x.group && (designMode ? true : x.dist <= LIVE_UPGRADE_RADIUS_M));
+
+  candidates.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.dist - b.dist));
+  return candidates.slice(0, LIVE_TOPN_CAP).map(x => x.key);
+}, [liveGroups, cameraInfo, designMode]);
+
+const liveUpgradeGroupKeySet = useMemo(
+  () => new Set(liveUpgradeGroupKeys),
+  [liveUpgradeGroupKeys]
+);
+
+// Keep the original liveGroups index for collision lookup
+const liveUpgradedGroups = useMemo(
+  () =>
+    (liveGroups || [])
+      .map((g, idx) => ({ ...g, _idx: idx, _key: liveGroupKey(g) }))
+      .filter(g => liveUpgradeGroupKeySet.has(g._key)),
+  [liveGroups, liveUpgradeGroupKeySet]
+);
+
+// IDs to hide from the sprite layer (all members of upgraded groups)
+const liveUpgradedUserIds = useMemo(
+  () => liveUpgradedGroups.flatMap(g => g.members.map(m => String(m.user_id))),
+  [liveUpgradedGroups]
+);
+
+// Sprite filter, hide upgraded ones (so JSX is the only thing you see for Top-N)
+const liveSpriteFilter = useMemo(() => {
+  const conditions = [['!', ['has', 'point_count']]];
+  if (liveUpgradedUserIds.length) {
+    conditions.push(['!', ['in', ['get', 'id'], ['literal', liveUpgradedUserIds]]]);
   }
+  return ['all', ...conditions];
+}, [liveUpgradedUserIds]);
+
+// GeoJSON for GPU sprites (use animatedPositions if available)
+const liveGeoJSON = useMemo(() => {
+  const features = (liveUsers || [])
+    .map(u => {
+      const mins = minutesSince(u.last_seen);
+      const bucket = liveBucket(mins);
+      if (bucket === 'hide') return null;
+
+      const anim = animatedPositions.get(u.user_id);
+      const lat = anim?.lat ?? u.lat;
+      const lng = anim?.lng ?? u.lng;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+      return {
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [lng, lat] },
+        properties: {
+          id: String(u.user_id),
+          minutesAgo: mins,
+          bucket, // 'live' | 'warm' | 'cooling' | 'stale'
+        },
+      };
+    })
+    .filter(Boolean);
+
+  return { type: 'FeatureCollection', features };
+}, [liveUsers, animatedPositions, minuteTick]);
+
+
+
 
   // Memoize clusters (use current latitude for accurate lng meters)
   const clusters = useMemo(
@@ -1542,12 +1649,50 @@ const postsGeoJSON = useMemo(() => {
       );
     })}
 
-        {/* [LIVELOC] render grouped live users with petals + +N badge (collision-aware) */}
-        {(liveGroups || []).map((g, idx) => {
+        {/* LIVE (sprites for everyone else; Top-N are hidden here and upgraded to JSX) */}
+        <MapboxGL.ShapeSource id="live-src" shape={liveGeoJSON} cluster={false}>
+          <MapboxGL.SymbolLayer
+            id="live-symbols"
+            filter={liveSpriteFilter}
+            style={{
+              iconImage: 'pin_event_100', // unified sprite for now
+              iconSize: [
+                'interpolate', ['linear'], ['zoom'],
+                12, 0.10,
+                14, 0.12,
+                16, 0.14,
+                18, 0.16,
+              ],
+              iconAnchor: 'bottom',
+              iconPitchAlignment: 'viewport',
+              iconAllowOverlap: true,
+              iconIgnorePlacement: true,
+            }}
+          />
+
+          {/* Optional tiny "Xm" label above the live sprite */}
+          <MapboxGL.SymbolLayer
+            id="live-minutes-label"
+            filter={liveSpriteFilter}
+            style={{
+              textField: ['concat', ['to-string', ['get', 'minutesAgo']], 'm'],
+              textSize: 10,
+              textColor: '#111111',
+              textHaloColor: '#FFFFFF',
+              textHaloWidth: 1.2,
+              textAllowOverlap: false,
+              textOffset: [0, -1.6],
+            }}
+          />
+        </MapboxGL.ShapeSource>
+
+        {/* [LIVELOC] Top-N upgraded live (groups or singles). Others are sprites. */}
+        {(liveUpgradedGroups || []).map((g) => {
+          const idx = g._idx; // original index for collision lookup
           const members = g.members || [];
           if (!members.length) return null;
 
-          // Centroid using animated positions
+          // Centroid using animated positions (match your previous behavior)
           const coords = members.map(u => {
             const pos = animatedPositions.get(u.user_id);
             return {
@@ -1562,7 +1707,7 @@ const postsGeoJSON = useMemo(() => {
           const lat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
           const lng = coords.reduce((s, p) => s + p.lng, 0) / coords.length;
 
-          // Age bucket → ring color
+          // Age bucket -> ring color
           const youngest = youngestMinutes(coords);
           const { bucket } = classifyAge(youngest);
           if (bucket === 'hide') return null;
@@ -1572,17 +1717,12 @@ const postsGeoJSON = useMemo(() => {
           const zoom = cameraInfo?.zoom ?? 0;
           const countOnly = zoom < LIVE_COUNT_ONLY_ZOOM;
 
-          // 🔸 Collision offset (only when not count-only)
+          // Collision offset vs upgraded posts (nudges only when not count-only)
           const col = liveCollisions.get(idx);
           let finalLng = lng;
           let finalLat = lat;
           if (col && !countOnly) {
-            const [olng, olat] = offsetCoordByPixels(
-              { lng, lat },
-              col.offsetX,
-              col.offsetY,
-              zoom
-            );
+            const [olng, olat] = offsetCoordByPixels({ lng, lat }, col.offsetX, col.offsetY, zoom);
             finalLng = olng;
             finalLat = olat;
           }
@@ -1603,7 +1743,7 @@ const postsGeoJSON = useMemo(() => {
             );
           }
 
-          // Zoomed-in “flower”
+          // Zoomed-in “flower”: hero + petals (your existing UI)
           const sorted = sortByRecency(coords);
           const hero = sorted[0];
           const petals = sorted.slice(1, LIVE_PETAL_MAX + 1);
@@ -1618,7 +1758,7 @@ const postsGeoJSON = useMemo(() => {
             <MapboxGL.MarkerView
               key={`livegrp-${idx}`}
               id={`livegrp-${idx}`}
-              coordinate={[finalLng, finalLat]}  // ⬅️ use offset coords
+              coordinate={[finalLng, finalLat]}
               allowOverlap={true}
               anchor={{ x: 0.5, y: 0.5 }}
             >
@@ -1639,7 +1779,7 @@ const postsGeoJSON = useMemo(() => {
 
                 {/* Hero + +N badge */}
                 <View style={{ alignItems: 'center' }}>
-                  <View /* tap target */>
+                  <View>
                     <View style={{ alignItems: 'center' }}>
                       <LiveRingMarker size={34} ringColor={ringColor} avatarUrl={hero?.avatar_url} />
                       <View
