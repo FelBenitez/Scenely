@@ -944,7 +944,14 @@ const liveUpgradeGroupKeys = useMemo(() => {
       const d = distanceInMeters(g.lat, g.lng, centerLat, centerLng);
       return { key: liveGroupKey(g), group: g, score: s, dist: d };
     })
-    .filter(x => x.group && (designMode ? true : x.dist <= LIVE_UPGRADE_RADIUS_M));
+    .filter(x => {
+      if (!x.group) return false;
+      if (designMode) return true;
+
+      const inRadius = x.dist <= LIVE_UPGRADE_RADIUS_M;
+      const inView = isSpotInView({ lat: x.group.lat, lng: x.group.lng }, cameraInfo);
+      return inRadius && inView;
+    });
 
   candidates.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.dist - b.dist));
   return candidates.slice(0, LIVE_TOPN_CAP).map(x => x.key);
