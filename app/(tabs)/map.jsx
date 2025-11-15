@@ -1474,7 +1474,7 @@ const liveGeoJSON = useMemo(() => {
     <View style={styles.container}>
       <MapboxGL.MapView
         style={StyleSheet.absoluteFillObject}
-        styleURL={MapboxGL.StyleURL.Street}
+        styleURL="mapbox://styles/scenelyapp/cmha9ldft005g01sg2yhkerka"
           onMapLoadingError={e => console.log('onDidFailLoadingMap', e?.nativeEvent)}
         onMapError={e => console.log('onMapError', e?.nativeEvent)}
         scaleBarEnabled={false}
@@ -1613,10 +1613,11 @@ const liveGeoJSON = useMemo(() => {
       const zoom = cameraInfo?.zoom ?? 14;
       const scaleDown = (zoom >= upgradeZoom && zoom < upgradeZoom + 0.5) ? POST_SCALE_NEAR_THRESHOLD : 1;
 
+      const markerKey = `spot-${hero.id}`;
       return (
         <MapboxGL.MarkerView
-          key={`spot-${idx}-${hero.id}`}
-          id={`spot-${idx}-${hero.id}`}
+          key={markerKey}
+          id={markerKey}
           coordinate={[lng, lat]}
           anchor={{ x: 0.5, y: 1 }}
           allowOverlap={true}
@@ -1721,6 +1722,7 @@ const liveGeoJSON = useMemo(() => {
         {/* [LIVELOC] Top-N upgraded live (groups or singles). Others are sprites. */}
         {(liveUpgradedGroups || []).map((g) => {
           const idx = g._idx; // original index for collision lookup
+          const groupKey = `livegrp-${g._key}`;
           const members = g.members || [];
           if (!members.length) return null;
 
@@ -1762,8 +1764,8 @@ const liveGeoJSON = useMemo(() => {
           if (countOnly) {
             return (
               <MapboxGL.MarkerView
-                key={`livegrp-${idx}`}
-                id={`livegrp-${idx}`}
+                key={groupKey}
+                id={groupKey}
                 coordinate={[lng, lat]}
                 anchor={{ x: 0.5, y: 0.5 }}
                 allowOverlap={true}
@@ -1788,8 +1790,8 @@ const liveGeoJSON = useMemo(() => {
 
           return (
             <MapboxGL.MarkerView
-              key={`livegrp-${idx}`}
-              id={`livegrp-${idx}`}
+              key={groupKey}
+              id={groupKey}
               coordinate={[finalLng, finalLat]}
               allowOverlap={true}
               anchor={{ x: 0.5, y: 0.5 }}
