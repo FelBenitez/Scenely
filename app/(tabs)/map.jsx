@@ -3,7 +3,9 @@ import MapboxGL from '@rnmapbox/maps';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Alert, AppState, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, AppState, Modal, StyleSheet, Text, TouchableOpacity, View, Dimensions } from 'react-native';
+// Screen size constants
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PostSheet from '../../components/PostSheet';
 import ComposerSheet from '../../components/ui/ComposerSheet';
@@ -333,6 +335,29 @@ function metersPerPixel(zoom, lat) {
   const EARTH_RADIUS = 6378137;         // meters
   const TILE_SIZE = 512;                 // Mapbox GL
   return (Math.cos(lat * Math.PI / 180) * 2 * Math.PI * EARTH_RADIUS) / (TILE_SIZE * Math.pow(2, zoom));
+}
+
+// Approximate whether a spot is inside the current viewport using center, zoom, and screen size
+function isSpotInView(spot, cameraInfo, paddingPx = 24) {
+  if (!spot) return false;
+  const { center, zoom } = cameraInfo || {};
+  if (!center || typeof zoom !== 'number') return false;
+
+  const [centerLng, centerLat] = center;
+  if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng)) return false;
+
+  // meters per pixel at this zoom/lat
+  const mpp = metersPerPixel(zoom, centerLat);
+
+  // Half-viewport in meters (with a small padding margin)
+  const halfWidthMeters = ((SCREEN_WIDTH / 2) + paddingPx) * mpp;
+  const halfHeightMeters = ((SCREEN_HEIGHT / 2) + paddingPx) * mpp;
+
+  // Convert lat/lng delta to meters
+  const dLatMeters = (spot.lat - centerLat) * 111000;
+  const dLngMeters = (spot.lng - centerLng) * 111000 * Math.cos(centerLat * Math.PI / 180);
+
+  return Math.abs(dLatMeters) <= halfHeightMeters && Math.abs(dLngMeters) <= halfWidthMeters;
 }
 
 // Convert a pixel offset (dx,dy) at the current zoom into a new [lng, lat] near a base coordinate.
@@ -774,10 +799,9 @@ const allSpots = useMemo(() => {
 // Pick Top-N spots (not posts) based on hero score + proximity; always include selected
 const topSpots = useMemo(() => {
   const { center, zoom } = cameraInfo;
-  if (!center || ( !designMode && zoom < upgradeZoom )) return [];
+  if (!center || (!designMode && zoom < upgradeZoom)) return [];
 
   const [centerLng, centerLat] = center;
-  const maxDistMeters = designMode ? Infinity : 600;
   const cap = designMode ? 20 : 8;
 
   const scored = allSpots
@@ -787,12 +811,13 @@ const topSpots = useMemo(() => {
       const prox = Math.max(0, 1000 - dist); // ~1km bell
       return { spot, dist, score: base + prox * 0.8 };
     })
-    .filter(x => x.dist <= maxDistMeters)
+    // Only consider spots actually inside the current viewport when not in design mode
+    .filter(x => designMode || isSpotInView(x.spot, cameraInfo))
     .sort((a, b) => (b.score - a.score) || (a.dist - b.dist));
 
   const picked = scored.slice(0, cap).map(x => x.spot);
 
-  // Always include the spot containing the selected post, if any
+  // Always include the spot containing the selected post, if any (even if off-screen)
   const selSpot = selectedPost
     ? allSpots.find(s => s.posts.some(p => String(p.id) === String(selectedPost.id)))
     : null;
