@@ -774,6 +774,9 @@ export default function MapTab() {
   // Online Count 
   const insets = useSafeAreaInsets();
 
+  // The height of your flush bottom bar (55) + the safe area
+  const TAB_BAR_HEIGHT = 55 + insets.bottom;
+
   const onlineCount = useMemo(() => {
     const now = Date.now();
     return liveUsers.filter(u => {
@@ -1476,6 +1479,16 @@ const liveGeoJSON = useMemo(() => {
         style={StyleSheet.absoluteFillObject}
         styleURL="mapbox://styles/scenelyapp/cmha9ldft005g01sg2yhkerka"
           onMapLoadingError={e => console.log('onDidFailLoadingMap', e?.nativeEvent)}
+
+        // 1. Pushes the Mapbox logo up
+        logoPosition={{ bottom: TAB_BAR_HEIGHT - 32, left: 8 }} 
+        
+        // 2. Pushes the "i" attribute icon up
+        attributionPosition={{ bottom: TAB_BAR_HEIGHT -32, right: -5 }}
+        
+        // 3. Tells Mapbox the bottom X pixels are covered by UI
+        // [top, right, bottom, left]
+        contentInset={[0, 0, TAB_BAR_HEIGHT, 0]}
         onMapError={e => console.log('onMapError', e?.nativeEvent)}
         scaleBarEnabled={false}
         onDidFinishLoadingStyle={() => setStyleLoaded(true)}
@@ -1989,7 +2002,7 @@ const liveGeoJSON = useMemo(() => {
       <TouchableOpacity
       style={[
         styles.fab,
-        { right: 16, bottom: 104, backgroundColor: designMode ? '#8B5CF6' : '#9CA3AF' },
+        { right: 16, bottom: TAB_BAR_HEIGHT+90, backgroundColor: designMode ? '#8B5CF6' : '#9CA3AF' },
       ]}
       onPress={() => setDesignMode(v => !v)}
     >
@@ -2002,7 +2015,7 @@ const liveGeoJSON = useMemo(() => {
       <TouchableOpacity
         style={[
           styles.fab,
-          { left: 16, bottom: 24, backgroundColor: pollingActive ? '#22c55e' : '#9CA3AF' },
+          { left: 16, bottom: TAB_BAR_HEIGHT + 16, backgroundColor: pollingActive ? '#22c55e' : '#9CA3AF' },
         ]}
         onPress={() => {
           setPollingActive((p) => {
@@ -2019,7 +2032,7 @@ const liveGeoJSON = useMemo(() => {
 
       {/* [LIVELOC] quick toggle for share */}
       <TouchableOpacity
-        style={[styles.fab, { right: 96, backgroundColor: shareLive ? '#1976D2' : '#9CA3AF' }]}
+        style={[styles.fab, { right: 96, bottom: TAB_BAR_HEIGHT + 16, backgroundColor: shareLive ? '#1976D2' : '#9CA3AF' }]}
         onPress={() => setShareLive(s => !s)}
       >
         <Text style={styles.fabText}>{shareLive ? 'On' : 'Off'}</Text>
