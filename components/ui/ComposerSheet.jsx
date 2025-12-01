@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { MessageCircle, MapPin, Calendar, Pizza, Camera } from 'lucide-react-native'; 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import usePressScale from '../../hooks/usePressScale';
+import { usePostHog } from 'posthog-react-native';
 
 const AnimatedBlur = Animated.createAnimatedComponent(BlurView);
 
@@ -28,6 +29,8 @@ export default function ComposerSheet({ visible, onClose, onSubmit }) {
   const [photo, setPhoto] = useState(null);
   const cat = CATS.find(c => c.key === category) || CATS[0];
   const canSubmit = text.trim().length > 0;
+
+  const posthog = usePostHog();
 
   useEffect(() => {
     if (visible) {
@@ -80,6 +83,7 @@ export default function ComposerSheet({ visible, onClose, onSubmit }) {
   function submit() {
     const trimmed = text.trim();
     if (!trimmed) return;
+    posthog?.capture('Post Created', { category: category, hasPhoto: !!photo });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     onSubmit?.({ text: trimmed, category, photoUri: photo });
     setText(''); 

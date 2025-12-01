@@ -28,6 +28,10 @@ import LiveRingMarker from '../../components/ui/LiveRingMarker';
 import LiveClusterSheet from '../../components/LiveClusterSheet';
 import { scorePost } from '../../utils/ranking';
 import { useOnlineCount } from '../../hooks/useOnlineCount';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { usePostHog } from 'posthog-react-native';
+
+const SHARE_LIVE_KEY = 'scenely:share_live';
 
 
 // Sprite(s) for post pins
@@ -550,7 +554,8 @@ export default function MapTab() {
   const [styleLoaded, setStyleLoaded] = useState(false);
 
   // Live location
-  const [shareLive, setShareLive] = useState(true); // toggle to share/halt heartbeat
+  // default false until we read from storage
+  const [shareLive, setShareLive] = useState(false);
   const [liveUsers, setLiveUsers] = useState([]);   // array of {user_id,lat,lng,last_seen,username,avatar_url}
   // [DEV] toggle for polling to save Supabase data during dev
   const [pollingActive, setPollingActive] = useState(false);
@@ -585,6 +590,33 @@ export default function MapTab() {
 
   const [userId, setUserId] = useState(null);
   const userIdRef = useRef(null);
+
+  const posthog = usePostHog();
+
+  useEffect(() => {
+    posthog?.screen('Map');
+  }, []);
+
+
+
+  // Load shareLive preference from AsyncStorage on mount
+  useEffect(() => {
+  (async () => {
+    try {
+      const stored = await AsyncStorage.getItem(SHARE_LIVE_KEY);
+      if (stored === null) {
+        // first launch → stay OFF (privacy-first)
+        setShareLive(false);
+      } else {
+        setShareLive(stored === 'true');
+      }
+    } catch (e) {
+      console.warn('[ShareLive] Failed to load pref:', e);
+      setShareLive(false);
+    }
+  })();
+}, []);
+
 
   useEffect(() => {
     userIdRef.current = userId;
@@ -1980,12 +2012,23 @@ const liveGeoJSON = useMemo(() => {
         <TopBar
         sharing={shareLive}
         onlineCount={onlineCount}
-        onToggle={(next) => {
+        onToggle={async (next) => {
+        try {
+          // update state immediately for snappy UI
           setShareLive(next);
-          // instant actions for responsiveness
-          if (next) { maybeSendHeartbeat(); }
-          if (pollingActive) { pollNearby(); }
-        }}
+          await AsyncStorage.setItem(SHARE_LIVE_KEY, String(next));
+        } catch (e) {
+          console.warn('[ShareLive] Failed to save pref:', e);
+        }
+
+        // instant actions for responsiveness
+        if (next) {
+          maybeSendHeartbeat();
+        }
+        if (pollingActive) {
+          pollNearby();
+        }
+      }}
         onFilterPress={() => {
         setStyleLoaded(false);               // so MapboxGL.Images waits for the new style
         setMapStyle((prev) =>
@@ -2058,7 +2101,7 @@ const liveGeoJSON = useMemo(() => {
  />
 
       {/* Designing button */}
-      <TouchableOpacity
+      {/* <TouchableOpacity
       style={[
         styles.fab,
         { right: 16, bottom: TAB_BAR_HEIGHT+90, backgroundColor: designMode ? '#8B5CF6' : '#9CA3AF' },
@@ -2068,7 +2111,7 @@ const liveGeoJSON = useMemo(() => {
       <Text style={{ color: 'white', fontSize: 12, fontWeight: '700', textAlign: 'center' }}>
         {designMode ? 'Design\nON' : 'Design\nOFF'}
       </Text>
-    </TouchableOpacity>
+    </TouchableOpacity> */}
 
       
 
@@ -2103,12 +2146,12 @@ const liveGeoJSON = useMemo(() => {
       
 
       {/* [LIVELOC] quick toggle for share */}
-      <TouchableOpacity
+      {/* <TouchableOpacity
         style={[styles.fab, { right: 96, bottom: TAB_BAR_HEIGHT + 16, backgroundColor: shareLive ? '#1976D2' : '#9CA3AF' }]}
         onPress={() => setShareLive(s => !s)}
       >
         <Text style={styles.fabText}>{shareLive ? 'On' : 'Off'}</Text>
-      </TouchableOpacity>
+      </TouchableOpacity> */}
 
       {/* <TouchableOpacity
         style={styles.fab}
