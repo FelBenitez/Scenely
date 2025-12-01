@@ -576,8 +576,8 @@ export default function MapTab() {
   const HEARTBEAT_MIN_INTERVAL = 60_000; // always send at least once a minute
 
 
-  const [userId, setUserId] = useState<string | null>(null);
-  const userIdRef = useRef<string | null>(null);
+  const [userId, setUserId] = useState(null);
+  const userIdRef = useRef(null);
 
   useEffect(() => {
     userIdRef.current = userId;
