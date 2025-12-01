@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
   Platform,
+  KeyboardAvoidingView
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,6 +39,7 @@ export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [username, setUsername] = useState('');
@@ -283,7 +285,10 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
     if (availability === 'taken') {
       return Alert.alert('Username', 'That handle is taken.');
     }
-    if (!hasChanges) return; // nothing to do
+    if (!hasChanges) {
+      setIsEditing(false); // Just exit edit mode
+      return; 
+    }
 
     try {
       setSaving(true);
@@ -332,6 +337,8 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
     setAvatarUrl(avatarRemoved ? null : (newAvatarUrl ?? avatarUrl));
     setLocalAvatarUri(null);
     setAvatarRemoved(false);
+
+    setIsEditing(false);
 
       Alert.alert('Saved', 'Your profile was updated.');
     } catch (e: any) {
@@ -445,25 +452,36 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: insets.top + 12, paddingBottom: 70 + insets.bottom },
+          { paddingTop: insets.top, paddingBottom: 85 + insets.bottom },
         ]}
+        keyboardDismissMode="on-drag"
+        automaticallyAdjustKeyboardInsets={true}
+        contentInsetAdjustmentBehavior="automatic"
       >
         {/* HEADER */}
         <View style={styles.header}>
- <TouchableOpacity onPress={handleAvatarEdit} style={styles.avatarWrapper}>
-    {localAvatarUri ? (
-      <Image source={{ uri: localAvatarUri }} style={styles.avatar} />
-    ) : avatarUrl ? (
-      <Image source={{ uri: avatarUrl }} style={styles.avatar} />
-    ) : (
-      <View style={[styles.avatar, styles.avatarPlaceholder]}>
-        <Ionicons name="person" size={36} color="#9CA3AF" />
-      </View>
-    )}
-    <View style={styles.avatarBadge}>
-      <Ionicons name="camera" size={16} color="#fff" />
-    </View>
-  </TouchableOpacity>
+            <TouchableOpacity 
+            onPress={isEditing ? handleAvatarEdit : undefined} 
+            activeOpacity={isEditing ? 0.7 : 1}
+            style={styles.avatarWrapper}
+          >
+            {localAvatarUri ? (
+              <Image source={{ uri: localAvatarUri }} style={styles.avatar} />
+            ) : avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+            ) : (
+              <View style={[styles.avatar, styles.avatarPlaceholder]}>
+                <Ionicons name="person" size={36} color="#9CA3AF" />
+              </View>
+            )}
+            
+            {/* ONLY SHOW BADGE IF EDITING */}
+            {isEditing && (
+              <View style={styles.avatarBadge}>
+                <Ionicons name="camera" size={16} color="#fff" />
+              </View>
+            )}
+          </TouchableOpacity>
 
 
   {displayName && (
@@ -479,26 +497,31 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
   ) : null}
 </View>
 
-        {/* ACCOUNT SECTION */}
-        <SectionLabel title="Account" />
+        {/* ACCOUNT SECTION HEADER WITH EDIT BUTTON */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingRight: 4 }}>
+          <SectionLabel title="Account" />
+          <TouchableOpacity onPress={() => setIsEditing(!isEditing)}>
+            <ThemedText style={{ color: '#F97316', fontWeight: '600', fontSize: 14 }}>
+              {isEditing ? 'Cancel' : 'Edit'}
+            </ThemedText>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.card}>
           <ThemedText style={styles.fieldLabel}>Full name</ThemedText>
           <TextInput
             value={fullName}
             onChangeText={setFullName}
-            placeholder="Add your name (looks better on the map)"
+            editable={isEditing} // <--- Only editable in mode
+            placeholder="Bevo Longhorn"
             placeholderTextColor="#9CA3AF"
             style={[
-              styles.input,
-              focusedField === 'fullName' && styles.inputFocused,
+              // Toggle styles based on mode
+              isEditing ? styles.input : styles.inputTextOnly,
+              isEditing && focusedField === 'fullName' && styles.inputFocused,
             ]}
             onFocus={() => setFocusedField('fullName')}
-            onBlur={() =>
-              setFocusedField((prev) =>
-                prev === 'fullName' ? null : prev,
-              )
-            }
+            onBlur={() => setFocusedField(null)}
           />
 
           <ThemedText style={[styles.fieldLabel, { marginTop: 16 }]}>
@@ -507,26 +530,24 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
           <TextInput
             value={username}
             onChangeText={setUsername}
+            editable={isEditing}
             autoCapitalize="none"
             placeholder="your_handle"
             placeholderTextColor="#9CA3AF"
             style={[
-              styles.input,
-              focusedField === 'username' && styles.inputFocused,
+              isEditing ? styles.input : styles.inputTextOnly,
+              isEditing && focusedField === 'username' && styles.inputFocused,
             ]}
             onFocus={() => setFocusedField('username')}
-            onBlur={() =>
-              setFocusedField((prev) =>
-                prev === 'username' ? null : prev,
-              )
-            }
+            onBlur={() => setFocusedField(null)}
           />
 
-          {usernameHelp && (
+          {/* Only show helpers and save button when editing */}
+          {isEditing && usernameHelp && (
             <ThemedText style={styles.metaText}>{usernameHelp}</ThemedText>
           )}
 
-          {hasChanges && (
+          {isEditing && hasChanges && (
             <TouchableOpacity
               onPress={save}
               disabled={disableSave}
@@ -651,7 +672,7 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
 
         {/* FOOTER */}
         <ThemedText style={styles.footerText}>
-          Scenely v1.0{'\n'}Built at UT Austin 🤘
+          Scenely v1.0{'\n'}Built at UT Austin
         </ThemedText>
       </ScrollView>
     </ThemedView>
@@ -706,11 +727,11 @@ const styles = StyleSheet.create({
   },
   avatarBadge: {
     position: 'absolute',
-    right: 2,
-    top: -6,
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    right: 0,
+    bottom: 0,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#FF6B35',
     alignItems: 'center',
     justifyContent: 'center',
@@ -756,7 +777,8 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   input: {
-    borderWidth: 0,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 10,
@@ -878,4 +900,10 @@ const styles = StyleSheet.create({
   fontSize: 13,
   color: '#9CA3AF',
 },
+inputTextOnly: {
+    borderWidth: 0, 
+    paddingHorizontal: 0, paddingVertical: 4,
+    fontSize: 16, backgroundColor: 'transparent',
+    color: '#111', fontWeight: '500'
+  },
 });

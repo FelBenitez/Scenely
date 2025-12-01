@@ -550,6 +550,9 @@ export default function MapTab() {
   const [liveUsers, setLiveUsers] = useState([]);   // array of {user_id,lat,lng,last_seen,username,avatar_url}
   // [DEV] toggle for polling to save Supabase data during dev
   const [pollingActive, setPollingActive] = useState(false);
+  const isDev = __DEV__;
+  // This is what the app actually uses:
+  const pollingEnabled = isDev ? pollingActive : true;
   const heartbeatRef = useRef(null);                // write loop interval
   const pollRef = useRef(null);                     // read loop interval
   const appState = useRef(AppState.currentState);   // pause in background
@@ -614,7 +617,7 @@ export default function MapTab() {
 const { onlineCount, refresh: refreshOnlineCount } = useOnlineCount(
   10,
   20_000,
-  pollingActive
+  pollingEnabled
 );
 
   // Global minute tick (keeps PinMarker progress cheap and in sync)
@@ -1325,7 +1328,7 @@ const liveGeoJSON = useMemo(() => {
     // clear any running timers
     if (pollRef.current) clearInterval(pollRef.current);
 
-    if (!pollingActive) return;
+    if (!pollingEnabled) return;
     // do an immediate poll for snappy UI
     pollNearby();
 
@@ -1333,7 +1336,7 @@ const liveGeoJSON = useMemo(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [pollingActive, pollIntervalMs]);
+  }, [pollingEnabled, pollIntervalMs]);
 
   // on app resume: instant poll + heartbeat
   useEffect(() => {
@@ -2052,7 +2055,12 @@ const liveGeoJSON = useMemo(() => {
       </Text>
     </TouchableOpacity>
 
+      
+
+
+      
       {/* [DEV] Polling toggle */}
+       {__DEV__ && (
       <TouchableOpacity
         style={[
           styles.fab,
@@ -2073,6 +2081,11 @@ const liveGeoJSON = useMemo(() => {
           {pollingActive ? 'Polling' : 'Not polling'}
         </Text>
       </TouchableOpacity>
+      )}
+
+
+
+      
 
       {/* [LIVELOC] quick toggle for share */}
       <TouchableOpacity

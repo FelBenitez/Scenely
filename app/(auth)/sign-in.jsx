@@ -1,6 +1,6 @@
 // app/auth/sign-in.jsx
 import { useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, Platform, StyleSheet } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Alert, Platform, StyleSheet,KeyboardAvoidingView, ScrollView } from 'react-native';
 import { supabase } from '../../lib/supabase';
 
 // ----- Small OTP input with 6 boxes -----
@@ -121,49 +121,57 @@ export default function SignIn() {
   };
 
   return (
-    <View style={{ flex: 1, padding: 24, justifyContent: 'center' }}>
-      <Text style={{ fontSize: 28, fontWeight: '800', marginBottom: 16 }}>Welcome to Scenely</Text>
+    <KeyboardAvoidingView 
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={{ flex: 1 }}
+    >
+      <ScrollView 
+        contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: 24 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={{ fontSize: 28, fontWeight: '800', marginBottom: 16 }}>Welcome to Scenely</Text>
 
-      {step === 'email' ? (
-        <>
-          <TextInput
-            placeholder="you@utexas.edu"
-            autoCapitalize="none"
-            keyboardType="email-address"
-            value={email}
-            onChangeText={setEmail}
-            style={styles.emailInput}
-          />
-          <TouchableOpacity
-            onPress={sendCode}
-            disabled={sending}
-            style={[styles.primaryBtn, sending && { opacity: 0.6 }]}
-          >
-            <Text style={styles.primaryText}>{sending ? 'Sending…' : 'Send Code'}</Text>
-          </TouchableOpacity>
-        </>
-      ) : (
-        <>
-          <Text style={{ marginBottom: 8, color: '#555' }}>Enter the 6-digit code</Text>
-          <OTPBoxes
-            value={code}
-            onChange={setCode}
-            onComplete={(c) => verifyCode(c)}
-          />
-          <TouchableOpacity
-            onPress={() => verifyCode()}
-            disabled={verifying || code.length !== 6}
-            style={[styles.primaryBtn, (verifying || code.length !== 6) && { opacity: 0.6 }]}
-          >
-            <Text style={styles.primaryText}>{verifying ? 'Verifying…' : 'Verify & Continue'}</Text>
-          </TouchableOpacity>
+        {step === 'email' ? (
+          <>
+            <TextInput
+              placeholder="you@utexas.edu"
+              autoCapitalize="none"
+              keyboardType="email-address"
+              value={email}
+              onChangeText={setEmail}
+              style={styles.emailInput}
+            />
+            <TouchableOpacity
+              onPress={sendCode}
+              disabled={sending}
+              style={[styles.primaryBtn, sending && { opacity: 0.6 }]}
+            >
+              <Text style={styles.primaryText}>{sending ? 'Sending…' : 'Send Code'}</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <Text style={{ marginBottom: 8, color: '#555' }}>Enter the 6-digit code</Text>
+            <OTPBoxes
+              value={code}
+              onChange={setCode}
+              onComplete={(c) => verifyCode(c)}
+            />
+            <TouchableOpacity
+              onPress={() => verifyCode()}
+              disabled={verifying || code.length !== 6}
+              style={[styles.primaryBtn, (verifying || code.length !== 6) && { opacity: 0.6 }]}
+            >
+              <Text style={styles.primaryText}>{verifying ? 'Verifying…' : 'Verify & Continue'}</Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity onPress={() => setStep('email')} style={{ marginTop: 12 }}>
-            <Text style={{ textAlign: 'center' }}>Use a different email</Text>
-          </TouchableOpacity>
-        </>
-      )}
-    </View>
+            <TouchableOpacity onPress={() => setStep('email')} style={{ marginTop: 12 }}>
+              <Text style={{ textAlign: 'center' }}>Use a different email</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
