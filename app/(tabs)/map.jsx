@@ -27,6 +27,7 @@ import { LIVE_GROUP_RADIUS_M, RING_BY_BUCKET } from '../../constants/map';
 import LiveRingMarker from '../../components/ui/LiveRingMarker';
 import LiveClusterSheet from '../../components/LiveClusterSheet';
 import { scorePost } from '../../utils/ranking';
+import { useOnlineCount } from '../../hooks/useOnlineCount';
 
 
 // Sprite(s) for post pins
@@ -542,7 +543,6 @@ export default function MapTab() {
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [selectedPost, setSelectedPost] = useState(null);
   const lastPostTime = useRef(0);
-  const MAX_ONLINE_MIN = 10;
   const [styleLoaded, setStyleLoaded] = useState(false);
 
   // Live location
@@ -553,6 +553,7 @@ export default function MapTab() {
   const heartbeatRef = useRef(null);                // write loop interval
   const pollRef = useRef(null);                     // read loop interval
   const appState = useRef(AppState.currentState);   // pause in background
+  const presenceIntervalRef = useRef(null);
 
   // Animation state
   const [animatedPositions, setAnimatedPositions] = useState(new Map());
@@ -575,7 +576,12 @@ export default function MapTab() {
   const HEARTBEAT_MIN_INTERVAL = 60_000; // always send at least once a minute
 
 
-  const [userId, setUserId] = useState(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const userIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
 
   // Derived id as string for filtering the selected sprite out
   const selectedId = selectedPost?.id ? String(selectedPost.id) : null;
@@ -604,6 +610,12 @@ export default function MapTab() {
   const LIVE_FLOWER_MIN_ZOOM = LIVE_COUNT_ONLY_ZOOM;
   const LIVE_PETAL_MAX = 5;          // up to 5 petals
   const [liveClusterSheet, setLiveClusterSheet] = useState(null); // { lat, lng, members }
+
+const { onlineCount, refresh: refreshOnlineCount } = useOnlineCount(
+  10,
+  20_000,
+  pollingActive
+);
 
   // Global minute tick (keeps PinMarker progress cheap and in sync)
   const [minuteTick, setMinuteTick] = useState(0);
@@ -776,15 +788,6 @@ export default function MapTab() {
 
   // The height of your flush bottom bar (55) + the safe area
   const TAB_BAR_HEIGHT = 55 + insets.bottom;
-
-  const onlineCount = useMemo(() => {
-    const now = Date.now();
-    return liveUsers.filter(u => {
-      if (!u?.last_seen) return false;
-      const mins = (now - new Date(u.last_seen).getTime()) / 60000;
-      return mins <= MAX_ONLINE_MIN;
-    }).length;
-  }, [liveUsers]);
 
 
 // Group nearby live users into simple clusters
@@ -1183,7 +1186,8 @@ const liveGeoJSON = useMemo(() => {
 
   async function maybeSendHeartbeat() {
   try {
-    if (!shareLive) return;
+    const uid = userIdRef.current;
+    if (!shareLive || !uid) return;
 
     // prefer the watcher’s latest reading; fallback to a one-shot
     let lat = lastDeviceCoordRef.current?.latitude ?? userLoc?.latitude;
@@ -1192,22 +1196,22 @@ const liveGeoJSON = useMemo(() => {
     if (lat == null || lng == null) {
       try {
         const { coords } = await Location.getCurrentPositionAsync({});
-        lat = coords.latitude; lng = coords.longitude;
-      } catch { return; }
+        lat = coords.latitude;
+        lng = coords.longitude;
+      } catch {
+        return;
+      }
     }
 
     if (!shouldSendHeartbeat({ lat, lng })) return;
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
     // privacy: coarse grid + user-stable jitter
-    const coarse = coarseAndJitter(lat, lng, user.id);
+    const coarse = coarseAndJitter(lat, lng, uid);
 
     const { error } = await supabase
       .from('live_locations')
       .upsert({
-        user_id: user.id,
+        user_id: uid,
         lat: coarse.lat,
         lng: coarse.lng,
         grid_id: coarse.gridId,
@@ -1225,7 +1229,25 @@ const liveGeoJSON = useMemo(() => {
   } catch (e) {
     console.error('[LiveLoc] Heartbeat error:', e);
   }
+}
+
+  async function sendPresenceHeartbeat() {
+  if (!userId) return;
+  try {
+    const { error } = await supabase
+      .from('user_presence')
+      .upsert({
+        user_id: userId,
+        last_seen: new Date().toISOString(),
+      });
+
+    if (error) {
+      console.error('[Presence] Heartbeat failed:', error.message);
+    }
+  } catch (e) {
+    console.error('[Presence] Heartbeat error:', e);
   }
+}
 
 
 
@@ -1275,10 +1297,28 @@ const liveGeoJSON = useMemo(() => {
           if (pollIntervalMs < 60_000) setPollIntervalMs(pollIntervalMs * 2);
         }
       }
+
     } catch (e) {
       console.error('[LiveLoc] Poll error:', e);
     }
   }
+
+  // presence heartbeat every 60s
+  useEffect(() => {
+  if (!userId) return;
+
+  // Fire once immediately
+  sendPresenceHeartbeat();
+
+  // Then every 60s while this screen is mounted
+  presenceIntervalRef.current = setInterval(sendPresenceHeartbeat, 60_000);
+
+  return () => {
+    if (presenceIntervalRef.current) {
+      clearInterval(presenceIntervalRef.current);
+    }
+  };
+}, [userId]);
 
     // polling loop with simple backoff
   useEffect(() => {
@@ -1305,6 +1345,7 @@ const liveGeoJSON = useMemo(() => {
         // instant “catch up”
         pollNearby();
         maybeSendHeartbeat();
+        sendPresenceHeartbeat();
         // reset poll interval after resume
         setPollIntervalMs(20_000);
       } else if (wasActive && state.match(/inactive|background/)) {
@@ -2020,7 +2061,10 @@ const liveGeoJSON = useMemo(() => {
         onPress={() => {
           setPollingActive((p) => {
             const next = !p;
-            if (!p) pollNearby(); // turning ON → poll now for instant feedback
+            if (!p) {
+              pollNearby(); // turning ON → poll now for instant feedback
+              refreshOnlineCount();
+            }
             return next;
           });
         }}
