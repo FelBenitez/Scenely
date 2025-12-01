@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   Modal, View, Text, TouchableOpacity, FlatList, TextInput, Alert, Image,
-  StyleSheet, Platform, Pressable, Animated, Easing
+  StyleSheet, Platform, Pressable, Animated, Easing, KeyboardAvoidingView
 } from 'react-native';
 import { ActionSheetIOS } from 'react-native';
 import { BlurView } from 'expo-blur';
@@ -684,6 +684,14 @@ export default function PostSheet({ post, onClose, userId, onRecenterMap }) {
     <Modal transparent visible={!!post} animationType="none" onRequestClose={onClose}>
       <AnimatedBlur intensity={20} tint="light" style={[StyleSheet.absoluteFill, styles.blurBG, { opacity: backdrop }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+
+        {/* --- ADDED KEYBOARD AVOIDING VIEW --- */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.kbContent}
+          pointerEvents="box-none"
+        >
+
         <Animated.View style={[styles.card, { transform: [{ translateY }] }]}>
           {/* Header */}
           <View style={styles.header}>
@@ -847,13 +855,21 @@ export default function PostSheet({ post, onClose, userId, onRecenterMap }) {
             </View>
           </View>
         </Animated.View>
+        </KeyboardAvoidingView>
       </AnimatedBlur>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  blurBG: { justifyContent: 'center', alignItems: 'center' },
+  blurBG: { justifyContent: 'center'},
+
+  kbContent: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+  },
 
   card: {
     backgroundColor: '#fff',

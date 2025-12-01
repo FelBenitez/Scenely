@@ -1,4 +1,3 @@
-// components/ui/ComposerSheet.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, Text, StyleSheet, Modal, TextInput, TouchableOpacity, Pressable, 
@@ -30,23 +29,20 @@ export default function ComposerSheet({ visible, onClose, onSubmit }) {
   const cat = CATS.find(c => c.key === category) || CATS[0];
   const canSubmit = text.trim().length > 0;
 
-  // Always default to “Talk” when opened
   useEffect(() => {
     if (visible) {
       setCategory(CATS[0].key);
     }
   }, [visible]);
 
-  // Animation state
   const [mounted, setMounted] = useState(visible);
   const backdrop = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(40)).current;
   const { scale, pressIn, pressOut, reset } = usePressScale(0.96);
 
   useEffect(() => {
-    reset(); // Reset button scale whenever visibility changes
+    reset(); 
   }, [visible, reset]);
-
 
   useEffect(() => {
     if (visible) setMounted(true);
@@ -103,110 +99,120 @@ export default function ComposerSheet({ visible, onClose, onSubmit }) {
 
   return (
     <Modal transparent visible animationType="none" onRequestClose={requestClose}>
+      
       <AnimatedBlur intensity={20} tint="light" style={[styles.backdrop, { opacity: backdrop }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={requestClose} />
 
-        <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-          <Text style={styles.title}>Create a Post</Text>
-
-          {/* Chips – icon above label, all in one row */}
-          <View style={styles.chipsRow}>
-            {CATS.map(c => {
-              const Selected = category === c.key;
-              const IconComp = c.Icon;
-              return (
-                <TouchableOpacity
-                  key={c.key}
-                  activeOpacity={0.85}
-                  onPress={() => handleCategorySelect(c.key)}
-                  style={[
-                    styles.chipVertical,
-                    { borderColor: c.tint, backgroundColor: Selected ? `${c.tint}22` : '#fff' },
-                  ]}
-                >
-                  <IconComp size={22} color={c.tint} strokeWidth={2.4} />
-                  <Text style={[styles.chipLabel, { color: c.tint }]} numberOfLines={1}>
-                    {c.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {/* Input */}
-          <View style={[styles.inputWrap, { backgroundColor: `${cat.tint}15` }]}>
-            <TextInput
-              value={text}
-              onChangeText={setText}
-              placeholder="What's happening near you?"
-              placeholderTextColor="#9CA3AF"
-              style={styles.input}
-              multiline
-              maxLength={160}
-              autoFocus
-            />
-            <Text style={styles.charCount}>{text.length}/160</Text>
-          </View>
-
-          {/* Photo */}
-          <TouchableOpacity style={styles.photoRow} onPress={pickPhoto}>
-            <Camera size={20} color="#111" strokeWidth={2.3} />
-            <Text style={styles.photoText}>{photo ? '1 photo selected' : 'Add Photo'}</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.expireText}>Expires in 4 hours</Text>
-
-          {/* CTA */}
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPressIn={pressIn}
-            onPressOut={pressOut}
-            onPress={submit}
-            disabled={!canSubmit}
-          >
-            <Animated.View
-            style={[
-            styles.cta,
-            { 
-                transform: [{ scale }], 
-                backgroundColor: canSubmit ? cat.tint : '#D1D5DB',
-                opacity: canSubmit ? 1 : 0.5
-            }
-            ]}
+        {/* --- KEY CHANGE START --- */}
+        {/* We wrap the Sheet in KeyboardAvoidingView. 
+            When keyboard opens, this view shrinks, pushing the centered sheet up. */}
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.kbContent}
+          pointerEvents="box-none" // Lets touches pass through to the backdrop if clicking outside
         >
-            <Text style={styles.ctaText}>Post</Text>
-            
-            </Animated.View>
-          </TouchableOpacity>
+          <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
+            <Text style={styles.title}>Create a Post</Text>
 
-          <TouchableOpacity onPress={requestClose} style={styles.cancel}>
-            <Text style={{ color: '#6B7280', fontWeight: '600' }}>Cancel</Text>
-          </TouchableOpacity>
-        </Animated.View>
+            <View style={styles.chipsRow}>
+              {CATS.map(c => {
+                const Selected = category === c.key;
+                const IconComp = c.Icon;
+                return (
+                  <TouchableOpacity
+                    key={c.key}
+                    activeOpacity={0.85}
+                    onPress={() => handleCategorySelect(c.key)}
+                    style={[
+                      styles.chipVertical,
+                      { borderColor: c.tint, backgroundColor: Selected ? `${c.tint}22` : '#fff' },
+                    ]}
+                  >
+                    <IconComp size={22} color={c.tint} strokeWidth={2.4} />
+                    <Text style={[styles.chipLabel, { color: c.tint }]} numberOfLines={1}>
+                      {c.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={[styles.inputWrap, { backgroundColor: `${cat.tint}15` }]}>
+              <TextInput
+                value={text}
+                onChangeText={setText}
+                placeholder="What's happening near you?"
+                placeholderTextColor="#9CA3AF"
+                style={styles.input}
+                multiline
+                maxLength={160}
+                autoFocus
+              />
+              <Text style={styles.charCount}>{text.length}/160</Text>
+            </View>
+
+            <TouchableOpacity style={styles.photoRow} onPress={pickPhoto}>
+              <Camera size={20} color="#111" strokeWidth={2.3} />
+              <Text style={styles.photoText}>{photo ? '1 photo selected' : 'Add Photo'}</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.expireText}>Expires in 4 hours</Text>
+
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPressIn={pressIn}
+              onPressOut={pressOut}
+              onPress={submit}
+              disabled={!canSubmit}
+            >
+              <Animated.View
+                style={[
+                  styles.cta,
+                  { 
+                    transform: [{ scale }], 
+                    backgroundColor: canSubmit ? cat.tint : '#D1D5DB',
+                    opacity: canSubmit ? 1 : 0.5
+                  }
+                ]}
+              >
+                <Text style={styles.ctaText}>Post</Text>
+              </Animated.View>
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={requestClose} style={styles.cancel}>
+              <Text style={{ color: '#6B7280', fontWeight: '600' }}>Cancel</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </KeyboardAvoidingView>
+        {/* --- KEY CHANGE END --- */}
+
       </AnimatedBlur>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, justifyContent: 'center' },
+  // Removed justifyContent: 'center' from here, moved to kbContent
+  backdrop: { flex: 1 }, 
 
-  kbWrap: { flex: 1 },
+  // This handles the centering AND the keyboard push
   kbContent: {
     flex: 1,
-    justifyContent: 'center',   // centers the sheet vertically
+    justifyContent: 'center', 
     alignItems: 'center',
+    width: '100%',
   },
 
   sheet: {
     backgroundColor: '#fff',
     borderRadius: 20,
-    padding: 20,                 // a bit more padding all around
+    padding: 20,
     paddingBottom: 22,
-    minHeight: 440,              // a touch taller
-    width: '92%',                // equal margins left/right
+    minHeight: 440,
+    width: '92%',
     maxWidth: 560,
-    alignSelf: 'center',         // ensure centering regardless of parent padding
+    // alignSelf: 'center' is handled by kbContent's alignItems
+    marginTop: 40,
   },
 
   title: { 
@@ -218,7 +224,6 @@ const styles = StyleSheet.create({
     textAlign: 'center' 
   },
 
-  // One row, evenly spaced chips
   chipsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -226,10 +231,9 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
 
-  // icon above label
   chipVertical: {
     flexGrow: 1,
-    flexBasis: 0,            // 4 equal columns
+    flexBasis: 0,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
