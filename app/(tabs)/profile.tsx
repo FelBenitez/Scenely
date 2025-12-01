@@ -21,6 +21,9 @@ import { supabase } from '../../lib/supabase';
 import { ThemedView } from '../../components/themed-view';
 import { ThemedText } from '../../components/themed-text';
 import { Colors } from '../../constants/theme';
+import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
 type Profile = {
   id: string;
@@ -33,8 +36,39 @@ type Profile = {
 const USERNAME_RE = /^[a-z0-9_.]{3,20}$/;
 const BUG_REPORT_EMAIL = 'support@scenely.app'; // change to your real email
 
+
+const getSupabaseProjectRef = () => {
+  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  if (!url) return null;
+
+  // SUPABASE_URL looks like "https://xxxxxx.supabase.co"
+  const match = url.match(/^https?:\/\/(.*?)\./);
+  return match?.[1] ?? null; // "xxxxxx"
+};
+
+const clearLocalStorageAndSecure = async () => {
+  try {
+    // Wipe all AsyncStorage keys
+    await AsyncStorage.clear();
+
+    // Wipe Supabase session from SecureStore
+    const projectRef = getSupabaseProjectRef();
+    if (projectRef) {
+      const supabaseSessionKey = `sb-${projectRef}-auth-token`;
+      await SecureStore.deleteItemAsync(supabaseSessionKey);
+    }
+
+    // If you ever store other secure keys, nuke them here too:
+    // await SecureStore.deleteItemAsync('my-other-key');
+  } catch (e) {
+    console.warn('Error clearing local + secure storage', e);
+  }
+};
+
+
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -348,9 +382,14 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
     }
   };
 
+
   const signOut = async () => {
+  try {
     await supabase.auth.signOut();
-  };
+  } finally {
+    await clearLocalStorageAndSecure();
+  }
+};
 
   const deleteAccount = async () => {
     Alert.alert(
@@ -374,6 +413,8 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
               if (fnError) throw fnError;
 
               await supabase.auth.signOut();
+              await clearLocalStorageAndSecure();
+              
               Alert.alert(
                 'Account deleted',
                 'Your account was permanently removed.',
@@ -628,6 +669,32 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
               )}
             </View>
           )}
+        </View>
+
+        {/* BETA WALKTHROUGH SECTION */}
+        <SectionLabel title="Beta walkthrough" />
+
+        <View style={styles.card}>
+          <TouchableOpacity
+            onPress={() => router.push('/beta-intro?fromProfile=1')}
+            style={styles.rowButton}
+          >
+            <View style={styles.rowLeft}>
+              <Ionicons
+                name="school-outline"
+                size={20}
+                color={Colors.light.icon}
+              />
+              <ThemedText style={styles.rowText}>
+                Replay beta instructions
+              </ThemedText>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+          </TouchableOpacity>
+
+          <ThemedText style={styles.metaText}>
+            Re-read what this beta is for and how to help test Scenely.
+          </ThemedText>
         </View>
 
 
