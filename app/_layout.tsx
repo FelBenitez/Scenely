@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type Profile = { id: string; username: string | null; full_name: string | null; avatar_url: string | null; onboarded: boolean };
 
@@ -63,22 +64,41 @@ useEffect(() => {
   }, [session]);
 
   // routing guard
+    // routing guard
   useEffect(() => {
     if (session === undefined || profile === undefined) return; // still loading
-    const inAuth = segments[0] === '(auth)';
-    const inOnboarding = segments[0] === '(onboarding)';
+
+    const rootSegment = segments[0];
+    const inAuth = rootSegment === '(auth)';
+    const inOnboarding = rootSegment === '(onboarding)';
+    const inBetaIntro = rootSegment === 'beta-intro';
 
     if (!session) {
       if (!inAuth) router.replace('/(auth)/sign-in');
       return;
     }
+
     // session exists
     if (!profile?.onboarded) {
       if (!inOnboarding) router.replace('/(onboarding)/complete-profile');
       return;
     }
+
     // session + onboarded
-    if (inAuth || inOnboarding) router.replace('/(tabs)/map');
+    (async () => {
+      const betaSeen = await AsyncStorage.getItem('scenely_beta_intro_v1');
+
+      // First time seeing this build → send to beta intro
+      if (!betaSeen && !inBetaIntro) {
+        router.replace('/beta-intro');
+        return;
+      }
+
+      // If beta already seen and user somehow ends up in auth/onboarding/beta, push to tabs
+      if (betaSeen && (inAuth || inOnboarding)) {
+        router.replace('/(tabs)/map');
+      }
+    })();
   }, [session, profile, segments, router]);
 
   // Minimal splash gate
