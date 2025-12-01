@@ -33,6 +33,9 @@ import { useOnlineCount } from '../../hooks/useOnlineCount';
 // Sprite(s) for post pins
 const PIN_EVENT_100 = require('../../assets/images/pins/pin_event_100.png');
 
+const STREET_STYLE = 'mapbox://styles/scenelyapp/cmha9ldft005g01sg2yhkerka';
+const SATELLITE_STYLE = 'mapbox://styles/scenelyapp/cmimht3uu002t01s0aoxvapln';
+
 
 const token =
   process.env.EXPO_PUBLIC_MAPBOX_TOKEN ??
@@ -534,6 +537,7 @@ function detectCollisions(upgradedSpots, liveGroups, zoom, thresholdPx = 12) {
 
 export default function MapTab() {
   const cameraRef = useRef(null);
+  const [mapStyle, setMapStyle] = useState(STREET_STYLE);
   const [composerOpen, setComposerOpen] = useState(false);
   const toastRef = useRef(null);
   const [confettiKey, setConfettiKey] = useState(0);
@@ -1521,7 +1525,7 @@ const liveGeoJSON = useMemo(() => {
     <View style={styles.container}>
       <MapboxGL.MapView
         style={StyleSheet.absoluteFillObject}
-        styleURL="mapbox://styles/scenelyapp/cmha9ldft005g01sg2yhkerka"
+        styleURL={mapStyle}
           onMapLoadingError={e => console.log('onDidFailLoadingMap', e?.nativeEvent)}
 
         // 1. Pushes the Mapbox logo up
@@ -1538,6 +1542,10 @@ const liveGeoJSON = useMemo(() => {
         onDidFinishLoadingStyle={() => setStyleLoaded(true)}
         onCameraChanged={onCameraChangedThrottled}
         onPress={() => { setSelectedPost(null); setSheetOpen(false); }}
+        pitchEnabled={true}    // this is true by default, but you can be explicit
+        rotateEnabled={true}   // also true by default
+        zoomEnabled={true}
+        scrollEnabled={true}
       >
         <MapboxGL.Camera
           ref={cameraRef}
@@ -1978,7 +1986,14 @@ const liveGeoJSON = useMemo(() => {
           if (next) { maybeSendHeartbeat(); }
           if (pollingActive) { pollNearby(); }
         }}
-        onFilterPress={() => { console.log('Filter pressed'); }}
+        onFilterPress={() => {
+        setStyleLoaded(false);               // so MapboxGL.Images waits for the new style
+        setMapStyle((prev) =>
+          prev === STREET_STYLE ? SATELLITE_STYLE : STREET_STYLE
+        );
+      }}
+      // Optional: tell TopBar which mode we’re in for UI
+      isSatellite={mapStyle === SATELLITE_STYLE}
       />
       </View>
 
