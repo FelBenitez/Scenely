@@ -7,6 +7,7 @@ import PostCard from '../../components/PostCard';
 import FeedTopBar from '../../components/FeedTopBar';
 import PostSheet from '../../components/PostSheet';
 import { rankTop, rankNew, deDupeSimilar } from '../../utils/ranking';
+import { useOnlineCount } from '../../hooks/useOnlineCount';
 
 type Profile = { avatar_url?: string | null; username?: string | null };
 export type Post = {
@@ -28,13 +29,11 @@ export type Post = {
   _dupeCount?: number;
 };
 
-const ONLINE_WINDOW_MIN = 10;
-
 const FeedTab: React.FC = () => {
   const [posts, setPosts] = useState<Post[]>([]);
   const [tab, setTab] = useState<'Top' | 'New'>('Top');
   const [refreshing, setRefreshing] = useState(false);
-  const [onlineCount, setOnlineCount] = useState<number | undefined>(undefined);
+  const { onlineCount, refresh: refreshOnlineCount } = useOnlineCount(10);
   const [selected, setSelected] = useState<Post | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
@@ -194,24 +193,6 @@ const FeedTab: React.FC = () => {
     return () => { supabase.removeChannel(likeChan).catch(() => {}); };
   }, [userId]);
 
-  // ONLINE COUNT.. matches Map logic: last 10 minutes) ----
-  const pollOnline = useCallback(async () => {
-    const sinceIso = new Date(Date.now() - ONLINE_WINDOW_MIN * 60_000).toISOString();
-    // Use a HEAD count for efficiency
-    const { count, error } = await supabase
-      .from('live_locations')
-      .select('user_id', { count: 'exact', head: true })
-      .gt('last_seen', sinceIso);
-
-    if (!error) setOnlineCount(count ?? 0);
-  }, []);
-
-  useEffect(() => {
-    pollOnline();
-    const id = setInterval(pollOnline, 20_000);
-    return () => clearInterval(id);
-  }, [pollOnline]);
-
   // DATASET / REFRESH 
   const dataset = useMemo(() => {
     const base = tab === 'New' ? rankNew(posts) : rankTop(posts);
@@ -219,9 +200,14 @@ const FeedTab: React.FC = () => {
   }, [posts, tab]);
 
   const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try { await fetchPosts(); await pollOnline(); } finally { setRefreshing(false); }
-  }, [fetchPosts, pollOnline]);
+  setRefreshing(true);
+  try {
+    await fetchPosts();
+    await refreshOnlineCount();   // ask the hook to refresh presence count
+  } finally {
+    setRefreshing(false);
+  }
+}, [fetchPosts, refreshOnlineCount]);
 
   // RENDER
   return (
