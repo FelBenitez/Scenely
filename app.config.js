@@ -12,7 +12,8 @@ export default () => ({
 
     ios: {
       supportsTablet: true,
-      bundleIdentifier: "com.scenely.app",
+      bundleIdentifier: "app.scenely.mobile",
+      buildNumber: "1",
       infoPlist: {
         NSLocationWhenInUseUsageDescription:
           "Scenely uses your location to show nearby events and activity on the map.",
@@ -22,7 +23,8 @@ export default () => ({
     },
 
     android: {
-      package: "com.scenely.app",
+      package: "app.scenely.mobile",
+      versionCode: 1,
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       adaptiveIcon: {
@@ -78,6 +80,7 @@ export default () => ({
     extra: {
       EXPO_PUBLIC_MAPBOX_TOKEN: process.env.EXPO_PUBLIC_MAPBOX_TOKEN,
       eas: { projectId: "0381af9c-0b2b-4a4a-957f-c632b2a3505f" },
+      author: "Felipe Benitez",
     },
   },
 });

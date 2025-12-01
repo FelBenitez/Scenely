@@ -29,6 +29,7 @@ import LiveClusterSheet from '../../components/LiveClusterSheet';
 import { scorePost } from '../../utils/ranking';
 import { useOnlineCount } from '../../hooks/useOnlineCount';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { usePostHog } from 'posthog-react-native';
 
 const SHARE_LIVE_KEY = 'scenely:share_live';
 
@@ -589,6 +590,14 @@ export default function MapTab() {
 
   const [userId, setUserId] = useState(null);
   const userIdRef = useRef(null);
+
+  const posthog = usePostHog();
+
+  useEffect(() => {
+    posthog?.screen('Map');
+  }, []);
+
+
 
   // Load shareLive preference from AsyncStorage on mount
   useEffect(() => {

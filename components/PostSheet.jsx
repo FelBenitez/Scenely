@@ -9,6 +9,7 @@ import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { Lock, Unlock, MapPin, Heart, MoreHorizontal, X } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { usePostHog } from 'posthog-react-native';
 
 const AnimatedBlur = Animated.createAnimatedComponent(BlurView);
 const PAGE_SIZE = 20;
@@ -49,6 +50,8 @@ export default function PostSheet({ post, onClose, userId, onRecenterMap }) {
   const [mounted, setMounted] = useState(!!post);
   const backdrop = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(40)).current;
+
+  const posthog = usePostHog();
 
   useEffect(() => { if (post) setMounted(true); }, [post]);
   useEffect(() => {
@@ -429,7 +432,7 @@ export default function PostSheet({ post, onClose, userId, onRecenterMap }) {
         });
         if (error) throw error;
       }
-
+      posthog?.capture('Comment Sent', { isPrivate: replyMode === 'private' });
       setDraft('');
       setParentId(null);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

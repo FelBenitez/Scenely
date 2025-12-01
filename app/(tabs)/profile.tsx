@@ -24,6 +24,8 @@ import { Colors } from '../../constants/theme';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
+import * as Sentry from '@sentry/react-native';
+import { usePostHog } from 'posthog-react-native';
 
 type Profile = {
   id: string;
@@ -81,6 +83,12 @@ export default function ProfileScreen() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null); // public URL
   const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null); // picked file uri
   const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  const posthog = usePostHog();
+
+  useEffect(() => {
+    posthog?.screen('Profile');
+  }, []);
 
   const [availability, setAvailability] =
     useState<'checking' | 'available' | 'taken' | 'idle'>('idle');
@@ -373,7 +381,7 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
     setAvatarRemoved(false);
 
     setIsEditing(false);
-
+      posthog?.capture('Profile Updated');
       Alert.alert('Saved', 'Your profile was updated.');
     } catch (e: any) {
       Alert.alert('Error', e.message ?? 'Could not save profile.');
@@ -382,6 +390,8 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
     }
   };
 
+
+  
 
   const signOut = async () => {
   try {
@@ -414,7 +424,7 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
 
               await supabase.auth.signOut();
               await clearLocalStorageAndSecure();
-              
+
               Alert.alert(
                 'Account deleted',
                 'Your account was permanently removed.',
@@ -435,6 +445,7 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
 
   const submitFeedback = async () => {
     if (!feedbackMessage.trim()) {
+      posthog?.capture('Bug Report Submitted', { hasImage: !!feedbackImageUri });
       return Alert.alert('Feedback', 'Tell us what went wrong first.');
     }
 
@@ -718,6 +729,10 @@ const hasChanges = usernameChanged || fullNameChanged || avatarChanged;
             />
           </TouchableOpacity>
         </View>
+
+          
+        
+
 
         {/* DANGER ZONE */}
         <SectionLabel title="Danger zone" />

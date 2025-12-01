@@ -8,6 +8,7 @@ import FeedTopBar from '../../components/FeedTopBar';
 import PostSheet from '../../components/PostSheet';
 import { rankTop, rankNew, deDupeSimilar } from '../../utils/ranking';
 import { useOnlineCount } from '../../hooks/useOnlineCount';
+import { usePostHog } from 'posthog-react-native';
 
 type Profile = { avatar_url?: string | null; username?: string | null };
 export type Post = {
@@ -36,6 +37,12 @@ const FeedTab: React.FC = () => {
   const { onlineCount, refresh: refreshOnlineCount } = useOnlineCount(10);
   const [selected, setSelected] = useState<Post | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+
+
+  const posthog = usePostHog();
+  useEffect(() => {
+    posthog?.screen('Feed');
+  }, []);
 
   // POSTS 
   const fetchPosts = useCallback(async () => {
