@@ -1,50 +1,100 @@
-# Welcome to your Expo app 👋
+# Scenely
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Scenely is a campus live-map social app built for college students to see what is happening around them in real time.
 
-## Get started
+Instead of scrolling through disconnected posts, students can explore a map of their campus and discover nearby events, moments, crowds, and social activity based on location. The goal is to make campus feel more alive, connected, and immediate.
 
-1. Install dependencies
+> Built with React Native, Expo, Supabase, PostgreSQL, and Mapbox.
 
-   ```bash
-   npm install
-   ```
+---
 
-2. Start the app
+## Screenshots
 
-   ```bash
-   npx expo start
-   ```
+> Replace these with your actual screenshot paths after uploading them to the repo.
 
-In the output, you'll find options to open the app in a
+<p align="center">
+  <img src="./assets/screenshots/home-map.png" width="250" alt="Scenely Map Screen" />
+  <img src="./assets/screenshots/post-view.png" width="250" alt="Scenely Post Screen" />
+  <img src="./assets/screenshots/create-post.png" width="250" alt="Scenely Create Post Screen" />
+</p>
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+---
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## Overview
 
-## Get a fresh project
+Scenely is designed around a simple idea: campus activity should be visible where it is happening.
 
-When you're ready, run:
+Students can open the app, view a live map of nearby posts, and instantly understand what is going on around campus. Whether it is a popular spot, a funny moment, a study area, a party, or a student event, Scenely brings location-based social discovery into one shared campus experience.
 
-```bash
-npm run reset-project
-```
+The app was built from the ground up as a mobile-first platform with real-time geospatial functionality, authentication, database-backed posts, and interactive map features.
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+---
 
-## Learn more
+## Features
 
-To learn more about developing your project with Expo, look at the following resources:
+- Live campus map with location-based posts
+- Interactive map pins for nearby activity
+- User authentication
+- Create and view posts tied to specific locations
+- Real-time backend powered by Supabase
+- Geospatial data storage using PostgreSQL
+- Mobile-first interface built with React Native
+- Map rendering and location features using Mapbox
+- Designed for college campus communities
+- Scalable structure for future moderation, events, profiles, and social features
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+---
 
-## Join the community
+## Tech Stack
 
-Join our community of developers creating universal apps.
+### Frontend
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- React Native
+- Expo
+- TypeScript / JavaScript
+- Mapbox Maps SDK
+- React Navigation
+
+### Backend
+
+- Supabase
+- PostgreSQL
+- Supabase Auth
+- Row Level Security
+- Geospatial data modeling
+
+### Tools
+
+- Git / GitHub
+- EAS Build
+- iOS Simulator
+- Environment-based configuration
+- Mobile debugging and testing tools
+
+---
+
+## Architecture
+
+Scenely uses a mobile client connected to a Supabase backend.
+
+The React Native frontend handles the user interface, map rendering, location-based interactions, and post creation flow. Supabase manages authentication, database storage, and backend access control. PostgreSQL stores structured app data, including posts, users, timestamps, and location coordinates.
+
+```txt
+React Native App
+      |
+      |-- User Authentication
+      |-- Map UI / Location Features
+      |-- Post Creation / Viewing
+      |
+Supabase Backend
+      |
+      |-- PostgreSQL Database
+      |-- Auth
+      |-- Row Level Security
+      |-- Geospatial Data
+      |
+Mapbox
+      |
+      |-- Interactive Campus Map
+      |-- Map Pins
+      |-- Location Rendering

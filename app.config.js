@@ -5,25 +5,25 @@ export default () => ({
     name: "Scenely",
     slug: "Scenely",
     owner: "scenely",
-    version: "1.0.0",
+    version: "1.0.1",
     scheme: "scenely",
     userInterfaceStyle: "automatic",
     newArchEnabled: true,
 
     ios: {
       supportsTablet: true,
-      bundleIdentifier: "app.scenely.mobile",
-      buildNumber: "1",
+      bundleIdentifier: "com.joinscenely.scenely",
       infoPlist: {
         NSLocationWhenInUseUsageDescription:
           "Scenely uses your location to show nearby events and activity on the map.",
           NSCameraUsageDescription: "Allow camera access to attach a photo to your post.",
           NSPhotoLibraryUsageDescription: "Allow photo library access to attach a photo to your post.",
+          "ITSAppUsesNonExemptEncryption": false,
       },
     },
 
     android: {
-      package: "app.scenely.mobile",
+      package: "com.joinscenely.scenely",
       versionCode: 1,
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
@@ -46,6 +46,7 @@ export default () => ({
           RNMAPBOX_MAPS_DOWNLOAD_TOKEN: process.env.RNMAPBOX_MAPS_DOWNLOAD_TOKEN,
         },
       ],
+      "expo-web-browser",
       // Native config-needed modules:
       "expo-secure-store",
       ["expo-location", { isIosBackgroundLocationEnabled: false }], // flip to true only if i implement it
