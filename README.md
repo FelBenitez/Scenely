@@ -461,8 +461,8 @@ Scenely is currently in beta development and early campus testing.
 Computer Science + Data Science Student at The University of Texas at Austin  
 Technical Co-Founder / Sole Developer of Scenely
 
-- LinkedIn: [linkedin.com/in/your-linkedin](https://www.linkedin.com/in/benitezfelipe/)
-- GitHub: [github.com/your-username](https://github.com/FelBenitez)
+- LinkedIn: https://www.linkedin.com/in/benitezfelipe/
+- GitHub: https://github.com/FelBenitez
 
 ---
 
