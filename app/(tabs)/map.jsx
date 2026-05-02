@@ -98,7 +98,7 @@ function formatMilesLabel(meters) {
   return `${rounded.toFixed(1)} mi`;
 }
 
-// Build distance label for a cluster of posts
+// Build distance label for a cluster of posts from current user to cluster
 function distanceLabelForCluster(cluster, userLoc) {
   if (!Array.isArray(cluster) || cluster.length === 0 || !userLoc) return '';
   // use centroid of the cluster (safe if all same spot)
@@ -880,7 +880,7 @@ const upgradedSpotMemberIdSet = useMemo(
   [upgradedSpots]
 );
 
-// Set of IDs allowed to render as GPU sprites: ALL posts from non-upgraded spots
+// Set of IDs allowed to render as GPU sprites: ALL posts from non-upgraded spots. The ones allowed to remain as GPU sprites
 const allowedSpriteIds = useMemo(() => {
   const keep = [];
   for (const s of allSpots) {
@@ -896,6 +896,7 @@ const allowedSpriteIds = useMemo(() => {
 
 
 // Detect when below the upgrade zoom (show all posts as sprites)
+// 
 const belowUpgradeZoom = useMemo(
   () => (!designMode && (cameraInfo?.zoom ?? 0) < upgradeZoom),
   [cameraInfo?.zoom, designMode, upgradeZoom]
@@ -2101,7 +2102,7 @@ const liveGeoJSON = useMemo(() => {
  />
 
       {/* Designing button */}
-      {/* <TouchableOpacity
+      <TouchableOpacity
       style={[
         styles.fab,
         { right: 16, bottom: TAB_BAR_HEIGHT+90, backgroundColor: designMode ? '#8B5CF6' : '#9CA3AF' },
@@ -2111,7 +2112,7 @@ const liveGeoJSON = useMemo(() => {
       <Text style={{ color: 'white', fontSize: 12, fontWeight: '700', textAlign: 'center' }}>
         {designMode ? 'Design\nON' : 'Design\nOFF'}
       </Text>
-    </TouchableOpacity> */}
+    </TouchableOpacity>
 
       
 
